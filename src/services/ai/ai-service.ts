@@ -160,56 +160,17 @@ export class AIService {
         content: msg.content
       }));
 
-      // Try to use the messages API if available
-      try {
-        // @ts-ignore - Ignoring type errors for compatibility
-        const response = await this.anthropic.messages.create({
-          model: this.currentModel,
-          messages: anthropicMessages,
-          max_tokens: 4096,
-        });
+      // Claude 3 models only support the Messages API
+      const response = await this.anthropic.messages.create({
+        model: this.currentModel,
+        messages: anthropicMessages,
+        max_tokens: 4096,
+      });
 
-        return {
-          response: response.content[0].text,
-          toolCalls: [],
-        };
-      } catch (error) {
-        // Fallback to older completion API
-        console.warn('Falling back to Anthropic completion API');
-        
-        // Format messages for completion API
-        const systemMessage = messages.find(m => m.role === 'system')?.content || '';
-        const userMessages = messages.filter(m => m.role === 'user' || m.role === 'assistant');
-        
-        let prompt = '';
-        if (systemMessage) {
-          prompt += `${systemMessage}\n\n`;
-        }
-        
-        for (const msg of userMessages) {
-          if (msg.role === 'user') {
-            prompt += `Human: ${msg.content}\n\n`;
-          } else {
-            prompt += `Assistant: ${msg.content}\n\n`;
-          }
-        }
-        
-        // Add the final human message indicator
-        prompt += 'Assistant: ';
-        
-        // @ts-ignore - Ignoring type errors for compatibility
-        const completionResponse = await this.anthropic.completions.create({
-          model: this.currentModel,
-          prompt: prompt,
-          max_tokens_to_sample: 4096,
-          stop_sequences: ['\n\nHuman:'],
-        });
-        
-        return {
-          response: completionResponse.completion,
-          toolCalls: [],
-        };
-      }
+      return {
+        response: response.content[0].text,
+        toolCalls: [],
+      };
     } catch (error) {
       console.error('Error sending message to Anthropic:', error);
       throw error;

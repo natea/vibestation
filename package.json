@@ -50,7 +50,7 @@
     "typescript": "~5.2.2"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.10.0",
+    "@anthropic-ai/sdk": "^0.40.1",
     "@tailwindcss/forms": "^0.5.7",
     "ai": "^4.3.13",
     "dotenv": "^16.3.1",

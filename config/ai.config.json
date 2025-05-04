@@ -7,17 +7,29 @@
           "id": "claude-3-sonnet-20240229",
           "name": "Claude 3 Sonnet",
           "maxTokens": 200000,
-          "enabled": true
+          "enabled": false
         },
         {
           "id": "claude-3-opus-20240229",
           "name": "Claude 3 Opus",
           "maxTokens": 200000,
-          "enabled": true
+          "enabled": false
         },
         {
           "id": "claude-3-haiku-20240307",
           "name": "Claude 3 Haiku",
+          "maxTokens": 200000,
+          "enabled": false
+        },
+        {
+          "id": "claude-3.5-sonnet-20240620",
+          "name": "Claude 3.5 Sonnet",
+          "maxTokens": 200000,
+          "enabled": true
+        },
+        {
+          "id": "claude-3-sonnet-20240229-v1:0",
+          "name": "Claude 3 Sonnet v1.0",
           "maxTokens": 200000,
           "enabled": true
         }
@@ -48,5 +60,5 @@
     }
   },
   "defaultProvider": "anthropic",
-  "defaultModel": "claude-3-sonnet-20240229"
+  "defaultModel": "claude-3.5-sonnet-20240620"
 }

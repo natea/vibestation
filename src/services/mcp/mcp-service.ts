@@ -171,26 +171,12 @@ export class MCPService {
         apiKey = process.env[envVar] || '';
       }
       
-      // Connect to server - using a more flexible approach to handle API changes
-      let server: MCPServer;
-      
-      try {
-        // Try new API first
-        server = await this.client.connect(serverConfig.name, {
-          type: 'sse',
-          url: serverConfig.url,
-          apiKey: apiKey
-        });
-      } catch (error) {
-        // Fallback for older versions of the SDK
-        console.warn(`Trying alternative connection method for ${serverConfig.name}`);
-        // @ts-ignore - Ignoring type errors for compatibility
-        server = await this.client.connectToSSEServer(
-          serverConfig.name,
-          serverConfig.url,
-          apiKey
-        );
-      }
+      // Connect to server using the current API version (mcp-client v1.8.0)
+      const server = await this.client.connect(serverConfig.name, {
+        type: 'sse',
+        url: serverConfig.url,
+        apiKey: apiKey
+      });
       
       // Store server
       this.servers.set(serverConfig.name, server);
