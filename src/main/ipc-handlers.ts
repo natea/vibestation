@@ -1,5 +1,5 @@
 import { ipcMain } from 'electron';
-import { aiService } from '../services/ai/ai-service';
+import { aiService, Message } from '../services/ai/ai-service';
 import { mcpService } from '../services/mcp/mcp-service';
 import { chatStorage } from '../services/storage/chat-storage';
 
@@ -25,7 +25,10 @@ function registerAiHandlers(): void {
   // Send a message to the AI
   ipcMain.handle('ai:send-message', async (event, message: string) => {
     try {
-      const messages = [{ role: 'user', content: message }];
+      const messages: Message[] = [{ 
+        role: 'user', 
+        content: message 
+      }];
       
       const response = await aiService.sendMessage(messages, async (toolCall) => {
         // Handle tool calls

@@ -13,6 +13,10 @@ if (require('electron-squirrel-startup')) {
   app.quit();
 }
 
+// Webpack entry points - these will be replaced by webpack during build
+declare const MAIN_WINDOW_WEBPACK_ENTRY: string;
+declare const MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY: string;
+
 let mainWindow: BrowserWindow | null = null;
 
 const createWindow = (): void => {
@@ -21,7 +25,7 @@ const createWindow = (): void => {
     width: 1200,
     height: 800,
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY,
       nodeIntegration: false,
       contextIsolation: true,
     },
@@ -76,8 +80,8 @@ app.on('activate', () => {
 // Clean up resources when quitting
 app.on('will-quit', async () => {
   try {
-    // Stop all MCP servers
-    await mcpService.stopAllServers();
+    // Disconnect from all MCP servers
+    await mcpService.disconnectAllServers();
     
     console.log('Application resources cleaned up');
   } catch (error) {

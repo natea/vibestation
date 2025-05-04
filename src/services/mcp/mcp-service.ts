@@ -1,24 +1,21 @@
-import { MCPClient, MCPServer, Tool, Resource } from 'mcp-client';
+import { MCPClient } from 'mcp-client';
 import * as dotenv from 'dotenv';
 import * as fs from 'fs';
 import * as path from 'path';
-import { spawn, ChildProcess } from 'child_process';
 
 // Load environment variables
 dotenv.config();
 
 // Define server types
-export type ServerType = 'stdio' | 'sse';
+export type ServerType = 'sse';
 
 // Define server interface
 export interface ServerConfig {
   name: string;
   type: ServerType;
-  command?: string;
-  url?: string;
+  url: string;
   apiKey?: string;
   enabled: boolean;
-  autoStart: boolean;
 }
 
 // Define MCP config interface
@@ -27,12 +24,32 @@ export interface MCPConfig {
   defaultServer: string;
 }
 
+// Define Tool interface
+export interface Tool {
+  name: string;
+  description: string;
+  parameters: any;
+}
+
+// Define Resource interface
+export interface Resource {
+  uri: string;
+  description: string;
+}
+
+// Define MCPServer interface
+export interface MCPServer {
+  getTools(): Promise<Tool[]>;
+  getResources(): Promise<Resource[]>;
+  executeTool(toolName: string, args: any): Promise<any>;
+  accessResource(uri: string): Promise<any>;
+}
+
 // MCP Service class
 export class MCPService {
   private config: MCPConfig;
-  private client: MCPClient;
+  private client: any; // Using any type to avoid SDK version conflicts
   private servers: Map<string, MCPServer> = new Map();
-  private processes: Map<string, ChildProcess> = new Map();
   private tools: Map<string, Map<string, Tool>> = new Map();
   private resources: Map<string, Map<string, Resource>> = new Map();
 
@@ -42,7 +59,15 @@ export class MCPService {
     this.config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
     
     // Initialize MCP client
-    this.client = new MCPClient();
+    try {
+      this.client = new MCPClient({
+        name: 'vibestation',
+        version: '0.1.0'
+      });
+      console.log('MCP client initialized');
+    } catch (error) {
+      console.error('Failed to initialize MCP client:', error);
+    }
     
     // Initialize servers
     this.initServers();
@@ -53,69 +78,12 @@ export class MCPService {
     for (const serverConfig of this.config.servers) {
       if (serverConfig.enabled) {
         try {
-          if (serverConfig.autoStart && serverConfig.type === 'stdio' && serverConfig.command) {
-            await this.startLocalServer(serverConfig);
-          } else if (serverConfig.type === 'sse' && serverConfig.url) {
-            await this.connectToRemoteServer(serverConfig);
-          }
+          await this.connectToRemoteServer(serverConfig);
         } catch (error) {
           console.error(`Failed to initialize MCP server ${serverConfig.name}:`, error);
         }
       }
     }
-  }
-
-  // Start a local STDIO server
-  private async startLocalServer(serverConfig: ServerConfig): Promise<void> {
-    if (!serverConfig.command) {
-      throw new Error(`No command specified for server ${serverConfig.name}`);
-    }
-
-    return new Promise((resolve, reject) => {
-      try {
-        // Parse command and arguments
-        const [command, ...args] = serverConfig.command!.split(' ');
-        
-        // Spawn process
-        const process = spawn(command, args, {
-          stdio: ['pipe', 'pipe', 'pipe'],
-          shell: true,
-        });
-        
-        // Store process
-        this.processes.set(serverConfig.name, process);
-        
-        // Handle process events
-        process.on('error', (error) => {
-          console.error(`Error starting MCP server ${serverConfig.name}:`, error);
-          reject(error);
-        });
-        
-        process.stdout.on('data', (data) => {
-          console.log(`[${serverConfig.name}] ${data.toString().trim()}`);
-        });
-        
-        process.stderr.on('data', (data) => {
-          console.error(`[${serverConfig.name}] ${data.toString().trim()}`);
-        });
-        
-        // Connect to server
-        this.client.connectToStdioServer(serverConfig.name, process.stdin, process.stdout)
-          .then((server) => {
-            this.servers.set(serverConfig.name, server);
-            this.loadServerTools(serverConfig.name, server);
-            console.log(`Connected to MCP server ${serverConfig.name}`);
-            resolve();
-          })
-          .catch((error) => {
-            console.error(`Failed to connect to MCP server ${serverConfig.name}:`, error);
-            reject(error);
-          });
-      } catch (error) {
-        console.error(`Failed to start MCP server ${serverConfig.name}:`, error);
-        reject(error);
-      }
-    });
   }
 
   // Connect to a remote SSE server
@@ -132,18 +100,32 @@ export class MCPService {
         apiKey = process.env[envVar] || '';
       }
       
-      // Connect to server
-      const server = await this.client.connectToSSEServer(
-        serverConfig.name,
-        serverConfig.url,
-        apiKey
-      );
+      // Connect to server - using a more flexible approach to handle API changes
+      let server: MCPServer;
+      
+      try {
+        // Try new API first
+        server = await this.client.connect(serverConfig.name, {
+          type: 'sse',
+          url: serverConfig.url,
+          apiKey: apiKey
+        });
+      } catch (error) {
+        // Fallback for older versions of the SDK
+        console.warn(`Trying alternative connection method for ${serverConfig.name}`);
+        // @ts-ignore - Ignoring type errors for compatibility
+        server = await this.client.connectToSSEServer(
+          serverConfig.name,
+          serverConfig.url,
+          apiKey
+        );
+      }
       
       // Store server
       this.servers.set(serverConfig.name, server);
       
       // Load server tools
-      this.loadServerTools(serverConfig.name, server);
+      await this.loadServerTools(serverConfig.name, server);
       
       console.log(`Connected to MCP server ${serverConfig.name}`);
     } catch (error) {
@@ -255,21 +237,12 @@ export class MCPService {
     }
   }
 
-  // Stop all servers
-  public async stopAllServers(): Promise<void> {
-    for (const [serverName, process] of this.processes.entries()) {
-      try {
-        process.kill();
-        console.log(`Stopped MCP server ${serverName}`);
-      } catch (error) {
-        console.error(`Error stopping MCP server ${serverName}:`, error);
-      }
-    }
-    
-    this.processes.clear();
+  // Disconnect from all servers
+  public async disconnectAllServers(): Promise<void> {
     this.servers.clear();
     this.tools.clear();
     this.resources.clear();
+    console.log('Disconnected from all MCP servers');
   }
 }
 

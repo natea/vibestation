@@ -69,11 +69,15 @@ export const AIProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
         
         // Get current provider and model
         const { provider, model } = await window.electronAPI.getCurrentProvider();
-        setCurrentProvider(provider);
+        // Ensure provider is a valid Provider type
+        const validProvider = (provider === 'anthropic' || provider === 'openai') 
+          ? provider 
+          : 'anthropic';
+        setCurrentProvider(validProvider);
         setCurrentModel(model);
         
         // Load models for the current provider
-        const models = await window.electronAPI.loadModels(provider);
+        const models = await window.electronAPI.loadModels(validProvider);
         setModels(models);
         
         setLoading(false);

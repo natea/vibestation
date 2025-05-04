@@ -56,6 +56,7 @@
     "dotenv": "^16.3.1",
     "electron-squirrel-startup": "^1.0.0",
     "mcp-client": "^1.8.0",
+    "openai": "^4.20.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-icons": "^4.12.0",

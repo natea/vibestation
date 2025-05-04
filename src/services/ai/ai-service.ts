@@ -57,8 +57,8 @@ export interface ToolResult {
 // AI Service class
 export class AIService {
   private config: AIConfig;
-  private anthropic: Anthropic | null = null;
-  private openai: OpenAI | null = null;
+  private anthropic: any = null; // Using any to avoid SDK version conflicts
+  private openai: any = null; // Using any to avoid SDK version conflicts
   private currentProvider: Provider;
   private currentModel: string;
 
@@ -154,18 +154,62 @@ export class AIService {
     }
 
     try {
-      const response = await this.anthropic.messages.create({
-        model: this.currentModel,
-        messages: messages,
-        max_tokens: 4096,
-      });
+      // Convert our message format to Anthropic's format
+      const anthropicMessages = messages.map(msg => ({
+        role: msg.role,
+        content: msg.content
+      }));
 
-      // TODO: Handle tool calls from Anthropic
-      // This is a placeholder for when Anthropic supports tool calls
-      return {
-        response: response.content[0].text,
-        toolCalls: [],
-      };
+      // Try to use the messages API if available
+      try {
+        // @ts-ignore - Ignoring type errors for compatibility
+        const response = await this.anthropic.messages.create({
+          model: this.currentModel,
+          messages: anthropicMessages,
+          max_tokens: 4096,
+        });
+
+        return {
+          response: response.content[0].text,
+          toolCalls: [],
+        };
+      } catch (error) {
+        // Fallback to older completion API
+        console.warn('Falling back to Anthropic completion API');
+        
+        // Format messages for completion API
+        const systemMessage = messages.find(m => m.role === 'system')?.content || '';
+        const userMessages = messages.filter(m => m.role === 'user' || m.role === 'assistant');
+        
+        let prompt = '';
+        if (systemMessage) {
+          prompt += `${systemMessage}\n\n`;
+        }
+        
+        for (const msg of userMessages) {
+          if (msg.role === 'user') {
+            prompt += `Human: ${msg.content}\n\n`;
+          } else {
+            prompt += `Assistant: ${msg.content}\n\n`;
+          }
+        }
+        
+        // Add the final human message indicator
+        prompt += 'Assistant: ';
+        
+        // @ts-ignore - Ignoring type errors for compatibility
+        const completionResponse = await this.anthropic.completions.create({
+          model: this.currentModel,
+          prompt: prompt,
+          max_tokens_to_sample: 4096,
+          stop_sequences: ['\n\nHuman:'],
+        });
+        
+        return {
+          response: completionResponse.completion,
+          toolCalls: [],
+        };
+      }
     } catch (error) {
       console.error('Error sending message to Anthropic:', error);
       throw error;
