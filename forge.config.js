@@ -45,6 +45,8 @@ module.exports = {
             },
           ],
         },
+        // Use a different port for the logger to avoid conflicts
+        loggerPort: 9001,
       },
     },
   ],
