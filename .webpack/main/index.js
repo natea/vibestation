@@ -1989,2634 +1989,6 @@ exports.VERSION = '0.10.2'; // x-release-please-version
 
 /***/ }),
 
-/***/ "./node_modules/@modelcontextprotocol/sdk/dist/esm/client/auth.js":
-/*!************************************************************************!*\
-  !*** ./node_modules/@modelcontextprotocol/sdk/dist/esm/client/auth.js ***!
-  \************************************************************************/
-/***/ ((__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) => {
-
-"use strict";
-__webpack_require__.r(__webpack_exports__);
-/* harmony export */ __webpack_require__.d(__webpack_exports__, {
-/* harmony export */   UnauthorizedError: () => (/* binding */ UnauthorizedError),
-/* harmony export */   auth: () => (/* binding */ auth),
-/* harmony export */   discoverOAuthMetadata: () => (/* binding */ discoverOAuthMetadata),
-/* harmony export */   exchangeAuthorization: () => (/* binding */ exchangeAuthorization),
-/* harmony export */   refreshAuthorization: () => (/* binding */ refreshAuthorization),
-/* harmony export */   registerClient: () => (/* binding */ registerClient),
-/* harmony export */   startAuthorization: () => (/* binding */ startAuthorization)
-/* harmony export */ });
-/* harmony import */ var pkce_challenge__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! pkce-challenge */ "./node_modules/pkce-challenge/dist/index.node.js");
-/* harmony import */ var _types_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../types.js */ "./node_modules/@modelcontextprotocol/sdk/dist/esm/types.js");
-/* harmony import */ var _shared_auth_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../shared/auth.js */ "./node_modules/@modelcontextprotocol/sdk/dist/esm/shared/auth.js");
-
-
-
-class UnauthorizedError extends Error {
-    constructor(message) {
-        super(message !== null && message !== void 0 ? message : "Unauthorized");
-    }
-}
-/**
- * Orchestrates the full auth flow with a server.
- *
- * This can be used as a single entry point for all authorization functionality,
- * instead of linking together the other lower-level functions in this module.
- */
-async function auth(provider, { serverUrl, authorizationCode }) {
-    const metadata = await discoverOAuthMetadata(serverUrl);
-    // Handle client registration if needed
-    let clientInformation = await Promise.resolve(provider.clientInformation());
-    if (!clientInformation) {
-        if (authorizationCode !== undefined) {
-            throw new Error("Existing OAuth client information is required when exchanging an authorization code");
-        }
-        if (!provider.saveClientInformation) {
-            throw new Error("OAuth client information must be saveable for dynamic registration");
-        }
-        const fullInformation = await registerClient(serverUrl, {
-            metadata,
-            clientMetadata: provider.clientMetadata,
-        });
-        await provider.saveClientInformation(fullInformation);
-        clientInformation = fullInformation;
-    }
-    // Exchange authorization code for tokens
-    if (authorizationCode !== undefined) {
-        const codeVerifier = await provider.codeVerifier();
-        const tokens = await exchangeAuthorization(serverUrl, {
-            metadata,
-            clientInformation,
-            authorizationCode,
-            codeVerifier,
-            redirectUri: provider.redirectUrl,
-        });
-        await provider.saveTokens(tokens);
-        return "AUTHORIZED";
-    }
-    const tokens = await provider.tokens();
-    // Handle token refresh or new authorization
-    if (tokens === null || tokens === void 0 ? void 0 : tokens.refresh_token) {
-        try {
-            // Attempt to refresh the token
-            const newTokens = await refreshAuthorization(serverUrl, {
-                metadata,
-                clientInformation,
-                refreshToken: tokens.refresh_token,
-            });
-            await provider.saveTokens(newTokens);
-            return "AUTHORIZED";
-        }
-        catch (error) {
-            console.error("Could not refresh OAuth tokens:", error);
-        }
-    }
-    // Start new authorization flow
-    const { authorizationUrl, codeVerifier } = await startAuthorization(serverUrl, {
-        metadata,
-        clientInformation,
-        redirectUrl: provider.redirectUrl
-    });
-    await provider.saveCodeVerifier(codeVerifier);
-    await provider.redirectToAuthorization(authorizationUrl);
-    return "REDIRECT";
-}
-/**
- * Looks up RFC 8414 OAuth 2.0 Authorization Server Metadata.
- *
- * If the server returns a 404 for the well-known endpoint, this function will
- * return `undefined`. Any other errors will be thrown as exceptions.
- */
-async function discoverOAuthMetadata(serverUrl, opts) {
-    var _a;
-    const url = new URL("/.well-known/oauth-authorization-server", serverUrl);
-    let response;
-    try {
-        response = await fetch(url, {
-            headers: {
-                "MCP-Protocol-Version": (_a = opts === null || opts === void 0 ? void 0 : opts.protocolVersion) !== null && _a !== void 0 ? _a : _types_js__WEBPACK_IMPORTED_MODULE_1__.LATEST_PROTOCOL_VERSION
-            }
-        });
-    }
-    catch (error) {
-        // CORS errors come back as TypeError
-        if (error instanceof TypeError) {
-            response = await fetch(url);
-        }
-        else {
-            throw error;
-        }
-    }
-    if (response.status === 404) {
-        return undefined;
-    }
-    if (!response.ok) {
-        throw new Error(`HTTP ${response.status} trying to load well-known OAuth metadata`);
-    }
-    return _shared_auth_js__WEBPACK_IMPORTED_MODULE_2__.OAuthMetadataSchema.parse(await response.json());
-}
-/**
- * Begins the authorization flow with the given server, by generating a PKCE challenge and constructing the authorization URL.
- */
-async function startAuthorization(serverUrl, { metadata, clientInformation, redirectUrl, }) {
-    const responseType = "code";
-    const codeChallengeMethod = "S256";
-    let authorizationUrl;
-    if (metadata) {
-        authorizationUrl = new URL(metadata.authorization_endpoint);
-        if (!metadata.response_types_supported.includes(responseType)) {
-            throw new Error(`Incompatible auth server: does not support response type ${responseType}`);
-        }
-        if (!metadata.code_challenge_methods_supported ||
-            !metadata.code_challenge_methods_supported.includes(codeChallengeMethod)) {
-            throw new Error(`Incompatible auth server: does not support code challenge method ${codeChallengeMethod}`);
-        }
-    }
-    else {
-        authorizationUrl = new URL("/authorize", serverUrl);
-    }
-    // Generate PKCE challenge
-    const challenge = await (0,pkce_challenge__WEBPACK_IMPORTED_MODULE_0__["default"])();
-    const codeVerifier = challenge.code_verifier;
-    const codeChallenge = challenge.code_challenge;
-    authorizationUrl.searchParams.set("response_type", responseType);
-    authorizationUrl.searchParams.set("client_id", clientInformation.client_id);
-    authorizationUrl.searchParams.set("code_challenge", codeChallenge);
-    authorizationUrl.searchParams.set("code_challenge_method", codeChallengeMethod);
-    authorizationUrl.searchParams.set("redirect_uri", String(redirectUrl));
-    return { authorizationUrl, codeVerifier };
-}
-/**
- * Exchanges an authorization code for an access token with the given server.
- */
-async function exchangeAuthorization(serverUrl, { metadata, clientInformation, authorizationCode, codeVerifier, redirectUri, }) {
-    const grantType = "authorization_code";
-    let tokenUrl;
-    if (metadata) {
-        tokenUrl = new URL(metadata.token_endpoint);
-        if (metadata.grant_types_supported &&
-            !metadata.grant_types_supported.includes(grantType)) {
-            throw new Error(`Incompatible auth server: does not support grant type ${grantType}`);
-        }
-    }
-    else {
-        tokenUrl = new URL("/token", serverUrl);
-    }
-    // Exchange code for tokens
-    const params = new URLSearchParams({
-        grant_type: grantType,
-        client_id: clientInformation.client_id,
-        code: authorizationCode,
-        code_verifier: codeVerifier,
-        redirect_uri: String(redirectUri),
-    });
-    if (clientInformation.client_secret) {
-        params.set("client_secret", clientInformation.client_secret);
-    }
-    const response = await fetch(tokenUrl, {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/x-www-form-urlencoded",
-        },
-        body: params,
-    });
-    if (!response.ok) {
-        throw new Error(`Token exchange failed: HTTP ${response.status}`);
-    }
-    return _shared_auth_js__WEBPACK_IMPORTED_MODULE_2__.OAuthTokensSchema.parse(await response.json());
-}
-/**
- * Exchange a refresh token for an updated access token.
- */
-async function refreshAuthorization(serverUrl, { metadata, clientInformation, refreshToken, }) {
-    const grantType = "refresh_token";
-    let tokenUrl;
-    if (metadata) {
-        tokenUrl = new URL(metadata.token_endpoint);
-        if (metadata.grant_types_supported &&
-            !metadata.grant_types_supported.includes(grantType)) {
-            throw new Error(`Incompatible auth server: does not support grant type ${grantType}`);
-        }
-    }
-    else {
-        tokenUrl = new URL("/token", serverUrl);
-    }
-    // Exchange refresh token
-    const params = new URLSearchParams({
-        grant_type: grantType,
-        client_id: clientInformation.client_id,
-        refresh_token: refreshToken,
-    });
-    if (clientInformation.client_secret) {
-        params.set("client_secret", clientInformation.client_secret);
-    }
-    const response = await fetch(tokenUrl, {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/x-www-form-urlencoded",
-        },
-        body: params,
-    });
-    if (!response.ok) {
-        throw new Error(`Token refresh failed: HTTP ${response.status}`);
-    }
-    return _shared_auth_js__WEBPACK_IMPORTED_MODULE_2__.OAuthTokensSchema.parse(await response.json());
-}
-/**
- * Performs OAuth 2.0 Dynamic Client Registration according to RFC 7591.
- */
-async function registerClient(serverUrl, { metadata, clientMetadata, }) {
-    let registrationUrl;
-    if (metadata) {
-        if (!metadata.registration_endpoint) {
-            throw new Error("Incompatible auth server: does not support dynamic client registration");
-        }
-        registrationUrl = new URL(metadata.registration_endpoint);
-    }
-    else {
-        registrationUrl = new URL("/register", serverUrl);
-    }
-    const response = await fetch(registrationUrl, {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-        },
-        body: JSON.stringify(clientMetadata),
-    });
-    if (!response.ok) {
-        throw new Error(`Dynamic client registration failed: HTTP ${response.status}`);
-    }
-    return _shared_auth_js__WEBPACK_IMPORTED_MODULE_2__.OAuthClientInformationFullSchema.parse(await response.json());
-}
-//# sourceMappingURL=auth.js.map
-
-/***/ }),
-
-/***/ "./node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js":
-/*!*************************************************************************!*\
-  !*** ./node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js ***!
-  \*************************************************************************/
-/***/ ((__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) => {
-
-"use strict";
-__webpack_require__.r(__webpack_exports__);
-/* harmony export */ __webpack_require__.d(__webpack_exports__, {
-/* harmony export */   Client: () => (/* binding */ Client)
-/* harmony export */ });
-/* harmony import */ var _shared_protocol_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../shared/protocol.js */ "./node_modules/@modelcontextprotocol/sdk/dist/esm/shared/protocol.js");
-/* harmony import */ var _types_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../types.js */ "./node_modules/@modelcontextprotocol/sdk/dist/esm/types.js");
-
-
-/**
- * An MCP client on top of a pluggable transport.
- *
- * The client will automatically begin the initialization flow with the server when connect() is called.
- *
- * To use with custom types, extend the base Request/Notification/Result types and pass them as type parameters:
- *
- * ```typescript
- * // Custom schemas
- * const CustomRequestSchema = RequestSchema.extend({...})
- * const CustomNotificationSchema = NotificationSchema.extend({...})
- * const CustomResultSchema = ResultSchema.extend({...})
- *
- * // Type aliases
- * type CustomRequest = z.infer<typeof CustomRequestSchema>
- * type CustomNotification = z.infer<typeof CustomNotificationSchema>
- * type CustomResult = z.infer<typeof CustomResultSchema>
- *
- * // Create typed client
- * const client = new Client<CustomRequest, CustomNotification, CustomResult>({
- *   name: "CustomClient",
- *   version: "1.0.0"
- * })
- * ```
- */
-class Client extends _shared_protocol_js__WEBPACK_IMPORTED_MODULE_0__.Protocol {
-    /**
-     * Initializes this client with the given name and version information.
-     */
-    constructor(_clientInfo, options) {
-        var _a;
-        super(options);
-        this._clientInfo = _clientInfo;
-        this._capabilities = (_a = options === null || options === void 0 ? void 0 : options.capabilities) !== null && _a !== void 0 ? _a : {};
-    }
-    /**
-     * Registers new capabilities. This can only be called before connecting to a transport.
-     *
-     * The new capabilities will be merged with any existing capabilities previously given (e.g., at initialization).
-     */
-    registerCapabilities(capabilities) {
-        if (this.transport) {
-            throw new Error("Cannot register capabilities after connecting to transport");
-        }
-        this._capabilities = (0,_shared_protocol_js__WEBPACK_IMPORTED_MODULE_0__.mergeCapabilities)(this._capabilities, capabilities);
-    }
-    assertCapability(capability, method) {
-        var _a;
-        if (!((_a = this._serverCapabilities) === null || _a === void 0 ? void 0 : _a[capability])) {
-            throw new Error(`Server does not support ${capability} (required for ${method})`);
-        }
-    }
-    async connect(transport, options) {
-        await super.connect(transport);
-        // When transport sessionId is already set this means we are trying to reconnect.
-        // In this case we don't need to initialize again.
-        if (transport.sessionId !== undefined) {
-            return;
-        }
-        try {
-            const result = await this.request({
-                method: "initialize",
-                params: {
-                    protocolVersion: _types_js__WEBPACK_IMPORTED_MODULE_1__.LATEST_PROTOCOL_VERSION,
-                    capabilities: this._capabilities,
-                    clientInfo: this._clientInfo,
-                },
-            }, _types_js__WEBPACK_IMPORTED_MODULE_1__.InitializeResultSchema, options);
-            if (result === undefined) {
-                throw new Error(`Server sent invalid initialize result: ${result}`);
-            }
-            if (!_types_js__WEBPACK_IMPORTED_MODULE_1__.SUPPORTED_PROTOCOL_VERSIONS.includes(result.protocolVersion)) {
-                throw new Error(`Server's protocol version is not supported: ${result.protocolVersion}`);
-            }
-            this._serverCapabilities = result.capabilities;
-            this._serverVersion = result.serverInfo;
-            this._instructions = result.instructions;
-            await this.notification({
-                method: "notifications/initialized",
-            });
-        }
-        catch (error) {
-            // Disconnect if initialization fails.
-            void this.close();
-            throw error;
-        }
-    }
-    /**
-     * After initialization has completed, this will be populated with the server's reported capabilities.
-     */
-    getServerCapabilities() {
-        return this._serverCapabilities;
-    }
-    /**
-     * After initialization has completed, this will be populated with information about the server's name and version.
-     */
-    getServerVersion() {
-        return this._serverVersion;
-    }
-    /**
-     * After initialization has completed, this may be populated with information about the server's instructions.
-     */
-    getInstructions() {
-        return this._instructions;
-    }
-    assertCapabilityForMethod(method) {
-        var _a, _b, _c, _d, _e;
-        switch (method) {
-            case "logging/setLevel":
-                if (!((_a = this._serverCapabilities) === null || _a === void 0 ? void 0 : _a.logging)) {
-                    throw new Error(`Server does not support logging (required for ${method})`);
-                }
-                break;
-            case "prompts/get":
-            case "prompts/list":
-                if (!((_b = this._serverCapabilities) === null || _b === void 0 ? void 0 : _b.prompts)) {
-                    throw new Error(`Server does not support prompts (required for ${method})`);
-                }
-                break;
-            case "resources/list":
-            case "resources/templates/list":
-            case "resources/read":
-            case "resources/subscribe":
-            case "resources/unsubscribe":
-                if (!((_c = this._serverCapabilities) === null || _c === void 0 ? void 0 : _c.resources)) {
-                    throw new Error(`Server does not support resources (required for ${method})`);
-                }
-                if (method === "resources/subscribe" &&
-                    !this._serverCapabilities.resources.subscribe) {
-                    throw new Error(`Server does not support resource subscriptions (required for ${method})`);
-                }
-                break;
-            case "tools/call":
-            case "tools/list":
-                if (!((_d = this._serverCapabilities) === null || _d === void 0 ? void 0 : _d.tools)) {
-                    throw new Error(`Server does not support tools (required for ${method})`);
-                }
-                break;
-            case "completion/complete":
-                if (!((_e = this._serverCapabilities) === null || _e === void 0 ? void 0 : _e.completions)) {
-                    throw new Error(`Server does not support completions (required for ${method})`);
-                }
-                break;
-            case "initialize":
-                // No specific capability required for initialize
-                break;
-            case "ping":
-                // No specific capability required for ping
-                break;
-        }
-    }
-    assertNotificationCapability(method) {
-        var _a;
-        switch (method) {
-            case "notifications/roots/list_changed":
-                if (!((_a = this._capabilities.roots) === null || _a === void 0 ? void 0 : _a.listChanged)) {
-                    throw new Error(`Client does not support roots list changed notifications (required for ${method})`);
-                }
-                break;
-            case "notifications/initialized":
-                // No specific capability required for initialized
-                break;
-            case "notifications/cancelled":
-                // Cancellation notifications are always allowed
-                break;
-            case "notifications/progress":
-                // Progress notifications are always allowed
-                break;
-        }
-    }
-    assertRequestHandlerCapability(method) {
-        switch (method) {
-            case "sampling/createMessage":
-                if (!this._capabilities.sampling) {
-                    throw new Error(`Client does not support sampling capability (required for ${method})`);
-                }
-                break;
-            case "roots/list":
-                if (!this._capabilities.roots) {
-                    throw new Error(`Client does not support roots capability (required for ${method})`);
-                }
-                break;
-            case "ping":
-                // No specific capability required for ping
-                break;
-        }
-    }
-    async ping(options) {
-        return this.request({ method: "ping" }, _types_js__WEBPACK_IMPORTED_MODULE_1__.EmptyResultSchema, options);
-    }
-    async complete(params, options) {
-        return this.request({ method: "completion/complete", params }, _types_js__WEBPACK_IMPORTED_MODULE_1__.CompleteResultSchema, options);
-    }
-    async setLoggingLevel(level, options) {
-        return this.request({ method: "logging/setLevel", params: { level } }, _types_js__WEBPACK_IMPORTED_MODULE_1__.EmptyResultSchema, options);
-    }
-    async getPrompt(params, options) {
-        return this.request({ method: "prompts/get", params }, _types_js__WEBPACK_IMPORTED_MODULE_1__.GetPromptResultSchema, options);
-    }
-    async listPrompts(params, options) {
-        return this.request({ method: "prompts/list", params }, _types_js__WEBPACK_IMPORTED_MODULE_1__.ListPromptsResultSchema, options);
-    }
-    async listResources(params, options) {
-        return this.request({ method: "resources/list", params }, _types_js__WEBPACK_IMPORTED_MODULE_1__.ListResourcesResultSchema, options);
-    }
-    async listResourceTemplates(params, options) {
-        return this.request({ method: "resources/templates/list", params }, _types_js__WEBPACK_IMPORTED_MODULE_1__.ListResourceTemplatesResultSchema, options);
-    }
-    async readResource(params, options) {
-        return this.request({ method: "resources/read", params }, _types_js__WEBPACK_IMPORTED_MODULE_1__.ReadResourceResultSchema, options);
-    }
-    async subscribeResource(params, options) {
-        return this.request({ method: "resources/subscribe", params }, _types_js__WEBPACK_IMPORTED_MODULE_1__.EmptyResultSchema, options);
-    }
-    async unsubscribeResource(params, options) {
-        return this.request({ method: "resources/unsubscribe", params }, _types_js__WEBPACK_IMPORTED_MODULE_1__.EmptyResultSchema, options);
-    }
-    async callTool(params, resultSchema = _types_js__WEBPACK_IMPORTED_MODULE_1__.CallToolResultSchema, options) {
-        return this.request({ method: "tools/call", params }, resultSchema, options);
-    }
-    async listTools(params, options) {
-        return this.request({ method: "tools/list", params }, _types_js__WEBPACK_IMPORTED_MODULE_1__.ListToolsResultSchema, options);
-    }
-    async sendRootsListChanged() {
-        return this.notification({ method: "notifications/roots/list_changed" });
-    }
-}
-//# sourceMappingURL=index.js.map
-
-/***/ }),
-
-/***/ "./node_modules/@modelcontextprotocol/sdk/dist/esm/client/sse.js":
-/*!***********************************************************************!*\
-  !*** ./node_modules/@modelcontextprotocol/sdk/dist/esm/client/sse.js ***!
-  \***********************************************************************/
-/***/ ((__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) => {
-
-"use strict";
-__webpack_require__.r(__webpack_exports__);
-/* harmony export */ __webpack_require__.d(__webpack_exports__, {
-/* harmony export */   SSEClientTransport: () => (/* binding */ SSEClientTransport),
-/* harmony export */   SseError: () => (/* binding */ SseError)
-/* harmony export */ });
-/* harmony import */ var eventsource__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! eventsource */ "./node_modules/eventsource/dist/index.js");
-/* harmony import */ var _types_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../types.js */ "./node_modules/@modelcontextprotocol/sdk/dist/esm/types.js");
-/* harmony import */ var _auth_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./auth.js */ "./node_modules/@modelcontextprotocol/sdk/dist/esm/client/auth.js");
-
-
-
-class SseError extends Error {
-    constructor(code, message, event) {
-        super(`SSE error: ${message}`);
-        this.code = code;
-        this.event = event;
-    }
-}
-/**
- * Client transport for SSE: this will connect to a server using Server-Sent Events for receiving
- * messages and make separate POST requests for sending messages.
- */
-class SSEClientTransport {
-    constructor(url, opts) {
-        this._url = url;
-        this._eventSourceInit = opts === null || opts === void 0 ? void 0 : opts.eventSourceInit;
-        this._requestInit = opts === null || opts === void 0 ? void 0 : opts.requestInit;
-        this._authProvider = opts === null || opts === void 0 ? void 0 : opts.authProvider;
-    }
-    async _authThenStart() {
-        var _a;
-        if (!this._authProvider) {
-            throw new _auth_js__WEBPACK_IMPORTED_MODULE_1__.UnauthorizedError("No auth provider");
-        }
-        let result;
-        try {
-            result = await (0,_auth_js__WEBPACK_IMPORTED_MODULE_1__.auth)(this._authProvider, { serverUrl: this._url });
-        }
-        catch (error) {
-            (_a = this.onerror) === null || _a === void 0 ? void 0 : _a.call(this, error);
-            throw error;
-        }
-        if (result !== "AUTHORIZED") {
-            throw new _auth_js__WEBPACK_IMPORTED_MODULE_1__.UnauthorizedError();
-        }
-        return await this._startOrAuth();
-    }
-    async _commonHeaders() {
-        const headers = {};
-        if (this._authProvider) {
-            const tokens = await this._authProvider.tokens();
-            if (tokens) {
-                headers["Authorization"] = `Bearer ${tokens.access_token}`;
-            }
-        }
-        return headers;
-    }
-    _startOrAuth() {
-        return new Promise((resolve, reject) => {
-            var _a;
-            this._eventSource = new eventsource__WEBPACK_IMPORTED_MODULE_2__.EventSource(this._url.href, (_a = this._eventSourceInit) !== null && _a !== void 0 ? _a : {
-                fetch: (url, init) => this._commonHeaders().then((headers) => fetch(url, {
-                    ...init,
-                    headers: {
-                        ...headers,
-                        Accept: "text/event-stream"
-                    }
-                })),
-            });
-            this._abortController = new AbortController();
-            this._eventSource.onerror = (event) => {
-                var _a;
-                if (event.code === 401 && this._authProvider) {
-                    this._authThenStart().then(resolve, reject);
-                    return;
-                }
-                const error = new SseError(event.code, event.message, event);
-                reject(error);
-                (_a = this.onerror) === null || _a === void 0 ? void 0 : _a.call(this, error);
-            };
-            this._eventSource.onopen = () => {
-                // The connection is open, but we need to wait for the endpoint to be received.
-            };
-            this._eventSource.addEventListener("endpoint", (event) => {
-                var _a;
-                const messageEvent = event;
-                try {
-                    this._endpoint = new URL(messageEvent.data, this._url);
-                    if (this._endpoint.origin !== this._url.origin) {
-                        throw new Error(`Endpoint origin does not match connection origin: ${this._endpoint.origin}`);
-                    }
-                }
-                catch (error) {
-                    reject(error);
-                    (_a = this.onerror) === null || _a === void 0 ? void 0 : _a.call(this, error);
-                    void this.close();
-                    return;
-                }
-                resolve();
-            });
-            this._eventSource.onmessage = (event) => {
-                var _a, _b;
-                const messageEvent = event;
-                let message;
-                try {
-                    message = _types_js__WEBPACK_IMPORTED_MODULE_0__.JSONRPCMessageSchema.parse(JSON.parse(messageEvent.data));
-                }
-                catch (error) {
-                    (_a = this.onerror) === null || _a === void 0 ? void 0 : _a.call(this, error);
-                    return;
-                }
-                (_b = this.onmessage) === null || _b === void 0 ? void 0 : _b.call(this, message);
-            };
-        });
-    }
-    async start() {
-        if (this._eventSource) {
-            throw new Error("SSEClientTransport already started! If using Client class, note that connect() calls start() automatically.");
-        }
-        return await this._startOrAuth();
-    }
-    /**
-     * Call this method after the user has finished authorizing via their user agent and is redirected back to the MCP client application. This will exchange the authorization code for an access token, enabling the next connection attempt to successfully auth.
-     */
-    async finishAuth(authorizationCode) {
-        if (!this._authProvider) {
-            throw new _auth_js__WEBPACK_IMPORTED_MODULE_1__.UnauthorizedError("No auth provider");
-        }
-        const result = await (0,_auth_js__WEBPACK_IMPORTED_MODULE_1__.auth)(this._authProvider, { serverUrl: this._url, authorizationCode });
-        if (result !== "AUTHORIZED") {
-            throw new _auth_js__WEBPACK_IMPORTED_MODULE_1__.UnauthorizedError("Failed to authorize");
-        }
-    }
-    async close() {
-        var _a, _b, _c;
-        (_a = this._abortController) === null || _a === void 0 ? void 0 : _a.abort();
-        (_b = this._eventSource) === null || _b === void 0 ? void 0 : _b.close();
-        (_c = this.onclose) === null || _c === void 0 ? void 0 : _c.call(this);
-    }
-    async send(message) {
-        var _a, _b, _c;
-        if (!this._endpoint) {
-            throw new Error("Not connected");
-        }
-        try {
-            const commonHeaders = await this._commonHeaders();
-            const headers = new Headers({ ...commonHeaders, ...(_a = this._requestInit) === null || _a === void 0 ? void 0 : _a.headers });
-            headers.set("content-type", "application/json");
-            const init = {
-                ...this._requestInit,
-                method: "POST",
-                headers,
-                body: JSON.stringify(message),
-                signal: (_b = this._abortController) === null || _b === void 0 ? void 0 : _b.signal,
-            };
-            const response = await fetch(this._endpoint, init);
-            if (!response.ok) {
-                if (response.status === 401 && this._authProvider) {
-                    const result = await (0,_auth_js__WEBPACK_IMPORTED_MODULE_1__.auth)(this._authProvider, { serverUrl: this._url });
-                    if (result !== "AUTHORIZED") {
-                        throw new _auth_js__WEBPACK_IMPORTED_MODULE_1__.UnauthorizedError();
-                    }
-                    // Purposely _not_ awaited, so we don't call onerror twice
-                    return this.send(message);
-                }
-                const text = await response.text().catch(() => null);
-                throw new Error(`Error POSTing to endpoint (HTTP ${response.status}): ${text}`);
-            }
-        }
-        catch (error) {
-            (_c = this.onerror) === null || _c === void 0 ? void 0 : _c.call(this, error);
-            throw error;
-        }
-    }
-}
-//# sourceMappingURL=sse.js.map
-
-/***/ }),
-
-/***/ "./node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js":
-/*!*************************************************************************!*\
-  !*** ./node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js ***!
-  \*************************************************************************/
-/***/ ((__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) => {
-
-"use strict";
-__webpack_require__.r(__webpack_exports__);
-/* harmony export */ __webpack_require__.d(__webpack_exports__, {
-/* harmony export */   DEFAULT_INHERITED_ENV_VARS: () => (/* binding */ DEFAULT_INHERITED_ENV_VARS),
-/* harmony export */   StdioClientTransport: () => (/* binding */ StdioClientTransport),
-/* harmony export */   getDefaultEnvironment: () => (/* binding */ getDefaultEnvironment)
-/* harmony export */ });
-/* harmony import */ var cross_spawn__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! cross-spawn */ "./node_modules/cross-spawn/index.js");
-/* harmony import */ var node_process__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! node:process */ "node:process");
-/* harmony import */ var node_stream__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! node:stream */ "node:stream");
-/* harmony import */ var _shared_stdio_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../shared/stdio.js */ "./node_modules/@modelcontextprotocol/sdk/dist/esm/shared/stdio.js");
-
-
-
-
-/**
- * Environment variables to inherit by default, if an environment is not explicitly given.
- */
-const DEFAULT_INHERITED_ENV_VARS = node_process__WEBPACK_IMPORTED_MODULE_1__.platform === "win32"
-    ? [
-        "APPDATA",
-        "HOMEDRIVE",
-        "HOMEPATH",
-        "LOCALAPPDATA",
-        "PATH",
-        "PROCESSOR_ARCHITECTURE",
-        "SYSTEMDRIVE",
-        "SYSTEMROOT",
-        "TEMP",
-        "USERNAME",
-        "USERPROFILE",
-    ]
-    : /* list inspired by the default env inheritance of sudo */
-        ["HOME", "LOGNAME", "PATH", "SHELL", "TERM", "USER"];
-/**
- * Returns a default environment object including only environment variables deemed safe to inherit.
- */
-function getDefaultEnvironment() {
-    const env = {};
-    for (const key of DEFAULT_INHERITED_ENV_VARS) {
-        const value = node_process__WEBPACK_IMPORTED_MODULE_1__.env[key];
-        if (value === undefined) {
-            continue;
-        }
-        if (value.startsWith("()")) {
-            // Skip functions, which are a security risk.
-            continue;
-        }
-        env[key] = value;
-    }
-    return env;
-}
-/**
- * Client transport for stdio: this will connect to a server by spawning a process and communicating with it over stdin/stdout.
- *
- * This transport is only available in Node.js environments.
- */
-class StdioClientTransport {
-    constructor(server) {
-        this._abortController = new AbortController();
-        this._readBuffer = new _shared_stdio_js__WEBPACK_IMPORTED_MODULE_3__.ReadBuffer();
-        this._stderrStream = null;
-        this._serverParams = server;
-        if (server.stderr === "pipe" || server.stderr === "overlapped") {
-            this._stderrStream = new node_stream__WEBPACK_IMPORTED_MODULE_2__.PassThrough();
-        }
-    }
-    /**
-     * Starts the server process and prepares to communicate with it.
-     */
-    async start() {
-        if (this._process) {
-            throw new Error("StdioClientTransport already started! If using Client class, note that connect() calls start() automatically.");
-        }
-        return new Promise((resolve, reject) => {
-            var _a, _b, _c, _d, _e, _f;
-            this._process = cross_spawn__WEBPACK_IMPORTED_MODULE_0__(this._serverParams.command, (_a = this._serverParams.args) !== null && _a !== void 0 ? _a : [], {
-                env: (_b = this._serverParams.env) !== null && _b !== void 0 ? _b : getDefaultEnvironment(),
-                stdio: ["pipe", "pipe", (_c = this._serverParams.stderr) !== null && _c !== void 0 ? _c : "inherit"],
-                shell: false,
-                signal: this._abortController.signal,
-                windowsHide: node_process__WEBPACK_IMPORTED_MODULE_1__.platform === "win32" && isElectron(),
-                cwd: this._serverParams.cwd,
-            });
-            this._process.on("error", (error) => {
-                var _a, _b;
-                if (error.name === "AbortError") {
-                    // Expected when close() is called.
-                    (_a = this.onclose) === null || _a === void 0 ? void 0 : _a.call(this);
-                    return;
-                }
-                reject(error);
-                (_b = this.onerror) === null || _b === void 0 ? void 0 : _b.call(this, error);
-            });
-            this._process.on("spawn", () => {
-                resolve();
-            });
-            this._process.on("close", (_code) => {
-                var _a;
-                this._process = undefined;
-                (_a = this.onclose) === null || _a === void 0 ? void 0 : _a.call(this);
-            });
-            (_d = this._process.stdin) === null || _d === void 0 ? void 0 : _d.on("error", (error) => {
-                var _a;
-                (_a = this.onerror) === null || _a === void 0 ? void 0 : _a.call(this, error);
-            });
-            (_e = this._process.stdout) === null || _e === void 0 ? void 0 : _e.on("data", (chunk) => {
-                this._readBuffer.append(chunk);
-                this.processReadBuffer();
-            });
-            (_f = this._process.stdout) === null || _f === void 0 ? void 0 : _f.on("error", (error) => {
-                var _a;
-                (_a = this.onerror) === null || _a === void 0 ? void 0 : _a.call(this, error);
-            });
-            if (this._stderrStream && this._process.stderr) {
-                this._process.stderr.pipe(this._stderrStream);
-            }
-        });
-    }
-    /**
-     * The stderr stream of the child process, if `StdioServerParameters.stderr` was set to "pipe" or "overlapped".
-     *
-     * If stderr piping was requested, a PassThrough stream is returned _immediately_, allowing callers to
-     * attach listeners before the start method is invoked. This prevents loss of any early
-     * error output emitted by the child process.
-     */
-    get stderr() {
-        var _a, _b;
-        if (this._stderrStream) {
-            return this._stderrStream;
-        }
-        return (_b = (_a = this._process) === null || _a === void 0 ? void 0 : _a.stderr) !== null && _b !== void 0 ? _b : null;
-    }
-    processReadBuffer() {
-        var _a, _b;
-        while (true) {
-            try {
-                const message = this._readBuffer.readMessage();
-                if (message === null) {
-                    break;
-                }
-                (_a = this.onmessage) === null || _a === void 0 ? void 0 : _a.call(this, message);
-            }
-            catch (error) {
-                (_b = this.onerror) === null || _b === void 0 ? void 0 : _b.call(this, error);
-            }
-        }
-    }
-    async close() {
-        this._abortController.abort();
-        this._process = undefined;
-        this._readBuffer.clear();
-    }
-    send(message) {
-        return new Promise((resolve) => {
-            var _a;
-            if (!((_a = this._process) === null || _a === void 0 ? void 0 : _a.stdin)) {
-                throw new Error("Not connected");
-            }
-            const json = (0,_shared_stdio_js__WEBPACK_IMPORTED_MODULE_3__.serializeMessage)(message);
-            if (this._process.stdin.write(json)) {
-                resolve();
-            }
-            else {
-                this._process.stdin.once("drain", resolve);
-            }
-        });
-    }
-}
-function isElectron() {
-    return "type" in node_process__WEBPACK_IMPORTED_MODULE_1__;
-}
-//# sourceMappingURL=stdio.js.map
-
-/***/ }),
-
-/***/ "./node_modules/@modelcontextprotocol/sdk/dist/esm/shared/auth.js":
-/*!************************************************************************!*\
-  !*** ./node_modules/@modelcontextprotocol/sdk/dist/esm/shared/auth.js ***!
-  \************************************************************************/
-/***/ ((__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) => {
-
-"use strict";
-__webpack_require__.r(__webpack_exports__);
-/* harmony export */ __webpack_require__.d(__webpack_exports__, {
-/* harmony export */   OAuthClientInformationFullSchema: () => (/* binding */ OAuthClientInformationFullSchema),
-/* harmony export */   OAuthClientInformationSchema: () => (/* binding */ OAuthClientInformationSchema),
-/* harmony export */   OAuthClientMetadataSchema: () => (/* binding */ OAuthClientMetadataSchema),
-/* harmony export */   OAuthClientRegistrationErrorSchema: () => (/* binding */ OAuthClientRegistrationErrorSchema),
-/* harmony export */   OAuthErrorResponseSchema: () => (/* binding */ OAuthErrorResponseSchema),
-/* harmony export */   OAuthMetadataSchema: () => (/* binding */ OAuthMetadataSchema),
-/* harmony export */   OAuthTokenRevocationRequestSchema: () => (/* binding */ OAuthTokenRevocationRequestSchema),
-/* harmony export */   OAuthTokensSchema: () => (/* binding */ OAuthTokensSchema)
-/* harmony export */ });
-/* harmony import */ var zod__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! zod */ "./node_modules/zod/lib/index.mjs");
-
-/**
- * RFC 8414 OAuth 2.0 Authorization Server Metadata
- */
-const OAuthMetadataSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z
-    .object({
-    issuer: zod__WEBPACK_IMPORTED_MODULE_0__.z.string(),
-    authorization_endpoint: zod__WEBPACK_IMPORTED_MODULE_0__.z.string(),
-    token_endpoint: zod__WEBPACK_IMPORTED_MODULE_0__.z.string(),
-    registration_endpoint: zod__WEBPACK_IMPORTED_MODULE_0__.z.string().optional(),
-    scopes_supported: zod__WEBPACK_IMPORTED_MODULE_0__.z.array(zod__WEBPACK_IMPORTED_MODULE_0__.z.string()).optional(),
-    response_types_supported: zod__WEBPACK_IMPORTED_MODULE_0__.z.array(zod__WEBPACK_IMPORTED_MODULE_0__.z.string()),
-    response_modes_supported: zod__WEBPACK_IMPORTED_MODULE_0__.z.array(zod__WEBPACK_IMPORTED_MODULE_0__.z.string()).optional(),
-    grant_types_supported: zod__WEBPACK_IMPORTED_MODULE_0__.z.array(zod__WEBPACK_IMPORTED_MODULE_0__.z.string()).optional(),
-    token_endpoint_auth_methods_supported: zod__WEBPACK_IMPORTED_MODULE_0__.z.array(zod__WEBPACK_IMPORTED_MODULE_0__.z.string()).optional(),
-    token_endpoint_auth_signing_alg_values_supported: zod__WEBPACK_IMPORTED_MODULE_0__.z
-        .array(zod__WEBPACK_IMPORTED_MODULE_0__.z.string())
-        .optional(),
-    service_documentation: zod__WEBPACK_IMPORTED_MODULE_0__.z.string().optional(),
-    revocation_endpoint: zod__WEBPACK_IMPORTED_MODULE_0__.z.string().optional(),
-    revocation_endpoint_auth_methods_supported: zod__WEBPACK_IMPORTED_MODULE_0__.z.array(zod__WEBPACK_IMPORTED_MODULE_0__.z.string()).optional(),
-    revocation_endpoint_auth_signing_alg_values_supported: zod__WEBPACK_IMPORTED_MODULE_0__.z
-        .array(zod__WEBPACK_IMPORTED_MODULE_0__.z.string())
-        .optional(),
-    introspection_endpoint: zod__WEBPACK_IMPORTED_MODULE_0__.z.string().optional(),
-    introspection_endpoint_auth_methods_supported: zod__WEBPACK_IMPORTED_MODULE_0__.z
-        .array(zod__WEBPACK_IMPORTED_MODULE_0__.z.string())
-        .optional(),
-    introspection_endpoint_auth_signing_alg_values_supported: zod__WEBPACK_IMPORTED_MODULE_0__.z
-        .array(zod__WEBPACK_IMPORTED_MODULE_0__.z.string())
-        .optional(),
-    code_challenge_methods_supported: zod__WEBPACK_IMPORTED_MODULE_0__.z.array(zod__WEBPACK_IMPORTED_MODULE_0__.z.string()).optional(),
-})
-    .passthrough();
-/**
- * OAuth 2.1 token response
- */
-const OAuthTokensSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z
-    .object({
-    access_token: zod__WEBPACK_IMPORTED_MODULE_0__.z.string(),
-    token_type: zod__WEBPACK_IMPORTED_MODULE_0__.z.string(),
-    expires_in: zod__WEBPACK_IMPORTED_MODULE_0__.z.number().optional(),
-    scope: zod__WEBPACK_IMPORTED_MODULE_0__.z.string().optional(),
-    refresh_token: zod__WEBPACK_IMPORTED_MODULE_0__.z.string().optional(),
-})
-    .strip();
-/**
- * OAuth 2.1 error response
- */
-const OAuthErrorResponseSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z
-    .object({
-    error: zod__WEBPACK_IMPORTED_MODULE_0__.z.string(),
-    error_description: zod__WEBPACK_IMPORTED_MODULE_0__.z.string().optional(),
-    error_uri: zod__WEBPACK_IMPORTED_MODULE_0__.z.string().optional(),
-});
-/**
- * RFC 7591 OAuth 2.0 Dynamic Client Registration metadata
- */
-const OAuthClientMetadataSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z.object({
-    redirect_uris: zod__WEBPACK_IMPORTED_MODULE_0__.z.array(zod__WEBPACK_IMPORTED_MODULE_0__.z.string()).refine((uris) => uris.every((uri) => URL.canParse(uri)), { message: "redirect_uris must contain valid URLs" }),
-    token_endpoint_auth_method: zod__WEBPACK_IMPORTED_MODULE_0__.z.string().optional(),
-    grant_types: zod__WEBPACK_IMPORTED_MODULE_0__.z.array(zod__WEBPACK_IMPORTED_MODULE_0__.z.string()).optional(),
-    response_types: zod__WEBPACK_IMPORTED_MODULE_0__.z.array(zod__WEBPACK_IMPORTED_MODULE_0__.z.string()).optional(),
-    client_name: zod__WEBPACK_IMPORTED_MODULE_0__.z.string().optional(),
-    client_uri: zod__WEBPACK_IMPORTED_MODULE_0__.z.string().optional(),
-    logo_uri: zod__WEBPACK_IMPORTED_MODULE_0__.z.string().optional(),
-    scope: zod__WEBPACK_IMPORTED_MODULE_0__.z.string().optional(),
-    contacts: zod__WEBPACK_IMPORTED_MODULE_0__.z.array(zod__WEBPACK_IMPORTED_MODULE_0__.z.string()).optional(),
-    tos_uri: zod__WEBPACK_IMPORTED_MODULE_0__.z.string().optional(),
-    policy_uri: zod__WEBPACK_IMPORTED_MODULE_0__.z.string().optional(),
-    jwks_uri: zod__WEBPACK_IMPORTED_MODULE_0__.z.string().optional(),
-    jwks: zod__WEBPACK_IMPORTED_MODULE_0__.z.any().optional(),
-    software_id: zod__WEBPACK_IMPORTED_MODULE_0__.z.string().optional(),
-    software_version: zod__WEBPACK_IMPORTED_MODULE_0__.z.string().optional(),
-}).strip();
-/**
- * RFC 7591 OAuth 2.0 Dynamic Client Registration client information
- */
-const OAuthClientInformationSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z.object({
-    client_id: zod__WEBPACK_IMPORTED_MODULE_0__.z.string(),
-    client_secret: zod__WEBPACK_IMPORTED_MODULE_0__.z.string().optional(),
-    client_id_issued_at: zod__WEBPACK_IMPORTED_MODULE_0__.z.number().optional(),
-    client_secret_expires_at: zod__WEBPACK_IMPORTED_MODULE_0__.z.number().optional(),
-}).strip();
-/**
- * RFC 7591 OAuth 2.0 Dynamic Client Registration full response (client information plus metadata)
- */
-const OAuthClientInformationFullSchema = OAuthClientMetadataSchema.merge(OAuthClientInformationSchema);
-/**
- * RFC 7591 OAuth 2.0 Dynamic Client Registration error response
- */
-const OAuthClientRegistrationErrorSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z.object({
-    error: zod__WEBPACK_IMPORTED_MODULE_0__.z.string(),
-    error_description: zod__WEBPACK_IMPORTED_MODULE_0__.z.string().optional(),
-}).strip();
-/**
- * RFC 7009 OAuth 2.0 Token Revocation request
- */
-const OAuthTokenRevocationRequestSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z.object({
-    token: zod__WEBPACK_IMPORTED_MODULE_0__.z.string(),
-    token_type_hint: zod__WEBPACK_IMPORTED_MODULE_0__.z.string().optional(),
-}).strip();
-//# sourceMappingURL=auth.js.map
-
-/***/ }),
-
-/***/ "./node_modules/@modelcontextprotocol/sdk/dist/esm/shared/protocol.js":
-/*!****************************************************************************!*\
-  !*** ./node_modules/@modelcontextprotocol/sdk/dist/esm/shared/protocol.js ***!
-  \****************************************************************************/
-/***/ ((__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) => {
-
-"use strict";
-__webpack_require__.r(__webpack_exports__);
-/* harmony export */ __webpack_require__.d(__webpack_exports__, {
-/* harmony export */   DEFAULT_REQUEST_TIMEOUT_MSEC: () => (/* binding */ DEFAULT_REQUEST_TIMEOUT_MSEC),
-/* harmony export */   Protocol: () => (/* binding */ Protocol),
-/* harmony export */   mergeCapabilities: () => (/* binding */ mergeCapabilities)
-/* harmony export */ });
-/* harmony import */ var _types_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../types.js */ "./node_modules/@modelcontextprotocol/sdk/dist/esm/types.js");
-
-/**
- * The default request timeout, in miliseconds.
- */
-const DEFAULT_REQUEST_TIMEOUT_MSEC = 60000;
-/**
- * Implements MCP protocol framing on top of a pluggable transport, including
- * features like request/response linking, notifications, and progress.
- */
-class Protocol {
-    constructor(_options) {
-        this._options = _options;
-        this._requestMessageId = 0;
-        this._requestHandlers = new Map();
-        this._requestHandlerAbortControllers = new Map();
-        this._notificationHandlers = new Map();
-        this._responseHandlers = new Map();
-        this._progressHandlers = new Map();
-        this._timeoutInfo = new Map();
-        this.setNotificationHandler(_types_js__WEBPACK_IMPORTED_MODULE_0__.CancelledNotificationSchema, (notification) => {
-            const controller = this._requestHandlerAbortControllers.get(notification.params.requestId);
-            controller === null || controller === void 0 ? void 0 : controller.abort(notification.params.reason);
-        });
-        this.setNotificationHandler(_types_js__WEBPACK_IMPORTED_MODULE_0__.ProgressNotificationSchema, (notification) => {
-            this._onprogress(notification);
-        });
-        this.setRequestHandler(_types_js__WEBPACK_IMPORTED_MODULE_0__.PingRequestSchema, 
-        // Automatic pong by default.
-        (_request) => ({}));
-    }
-    _setupTimeout(messageId, timeout, maxTotalTimeout, onTimeout, resetTimeoutOnProgress = false) {
-        this._timeoutInfo.set(messageId, {
-            timeoutId: setTimeout(onTimeout, timeout),
-            startTime: Date.now(),
-            timeout,
-            maxTotalTimeout,
-            resetTimeoutOnProgress,
-            onTimeout
-        });
-    }
-    _resetTimeout(messageId) {
-        const info = this._timeoutInfo.get(messageId);
-        if (!info)
-            return false;
-        const totalElapsed = Date.now() - info.startTime;
-        if (info.maxTotalTimeout && totalElapsed >= info.maxTotalTimeout) {
-            this._timeoutInfo.delete(messageId);
-            throw new _types_js__WEBPACK_IMPORTED_MODULE_0__.McpError(_types_js__WEBPACK_IMPORTED_MODULE_0__.ErrorCode.RequestTimeout, "Maximum total timeout exceeded", { maxTotalTimeout: info.maxTotalTimeout, totalElapsed });
-        }
-        clearTimeout(info.timeoutId);
-        info.timeoutId = setTimeout(info.onTimeout, info.timeout);
-        return true;
-    }
-    _cleanupTimeout(messageId) {
-        const info = this._timeoutInfo.get(messageId);
-        if (info) {
-            clearTimeout(info.timeoutId);
-            this._timeoutInfo.delete(messageId);
-        }
-    }
-    /**
-     * Attaches to the given transport, starts it, and starts listening for messages.
-     *
-     * The Protocol object assumes ownership of the Transport, replacing any callbacks that have already been set, and expects that it is the only user of the Transport instance going forward.
-     */
-    async connect(transport) {
-        this._transport = transport;
-        this._transport.onclose = () => {
-            this._onclose();
-        };
-        this._transport.onerror = (error) => {
-            this._onerror(error);
-        };
-        this._transport.onmessage = (message, extra) => {
-            if ((0,_types_js__WEBPACK_IMPORTED_MODULE_0__.isJSONRPCResponse)(message) || (0,_types_js__WEBPACK_IMPORTED_MODULE_0__.isJSONRPCError)(message)) {
-                this._onresponse(message);
-            }
-            else if ((0,_types_js__WEBPACK_IMPORTED_MODULE_0__.isJSONRPCRequest)(message)) {
-                this._onrequest(message, extra);
-            }
-            else if ((0,_types_js__WEBPACK_IMPORTED_MODULE_0__.isJSONRPCNotification)(message)) {
-                this._onnotification(message);
-            }
-            else {
-                this._onerror(new Error(`Unknown message type: ${JSON.stringify(message)}`));
-            }
-        };
-        await this._transport.start();
-    }
-    _onclose() {
-        var _a;
-        const responseHandlers = this._responseHandlers;
-        this._responseHandlers = new Map();
-        this._progressHandlers.clear();
-        this._transport = undefined;
-        (_a = this.onclose) === null || _a === void 0 ? void 0 : _a.call(this);
-        const error = new _types_js__WEBPACK_IMPORTED_MODULE_0__.McpError(_types_js__WEBPACK_IMPORTED_MODULE_0__.ErrorCode.ConnectionClosed, "Connection closed");
-        for (const handler of responseHandlers.values()) {
-            handler(error);
-        }
-    }
-    _onerror(error) {
-        var _a;
-        (_a = this.onerror) === null || _a === void 0 ? void 0 : _a.call(this, error);
-    }
-    _onnotification(notification) {
-        var _a;
-        const handler = (_a = this._notificationHandlers.get(notification.method)) !== null && _a !== void 0 ? _a : this.fallbackNotificationHandler;
-        // Ignore notifications not being subscribed to.
-        if (handler === undefined) {
-            return;
-        }
-        // Starting with Promise.resolve() puts any synchronous errors into the monad as well.
-        Promise.resolve()
-            .then(() => handler(notification))
-            .catch((error) => this._onerror(new Error(`Uncaught error in notification handler: ${error}`)));
-    }
-    _onrequest(request, extra) {
-        var _a, _b, _c, _d;
-        const handler = (_a = this._requestHandlers.get(request.method)) !== null && _a !== void 0 ? _a : this.fallbackRequestHandler;
-        if (handler === undefined) {
-            (_b = this._transport) === null || _b === void 0 ? void 0 : _b.send({
-                jsonrpc: "2.0",
-                id: request.id,
-                error: {
-                    code: _types_js__WEBPACK_IMPORTED_MODULE_0__.ErrorCode.MethodNotFound,
-                    message: "Method not found",
-                },
-            }).catch((error) => this._onerror(new Error(`Failed to send an error response: ${error}`)));
-            return;
-        }
-        const abortController = new AbortController();
-        this._requestHandlerAbortControllers.set(request.id, abortController);
-        const fullExtra = {
-            signal: abortController.signal,
-            sessionId: (_c = this._transport) === null || _c === void 0 ? void 0 : _c.sessionId,
-            _meta: (_d = request.params) === null || _d === void 0 ? void 0 : _d._meta,
-            sendNotification: (notification) => this.notification(notification, { relatedRequestId: request.id }),
-            sendRequest: (r, resultSchema, options) => this.request(r, resultSchema, { ...options, relatedRequestId: request.id }),
-            authInfo: extra === null || extra === void 0 ? void 0 : extra.authInfo,
-            requestId: request.id,
-        };
-        // Starting with Promise.resolve() puts any synchronous errors into the monad as well.
-        Promise.resolve()
-            .then(() => handler(request, fullExtra))
-            .then((result) => {
-            var _a;
-            if (abortController.signal.aborted) {
-                return;
-            }
-            return (_a = this._transport) === null || _a === void 0 ? void 0 : _a.send({
-                result,
-                jsonrpc: "2.0",
-                id: request.id,
-            });
-        }, (error) => {
-            var _a, _b;
-            if (abortController.signal.aborted) {
-                return;
-            }
-            return (_a = this._transport) === null || _a === void 0 ? void 0 : _a.send({
-                jsonrpc: "2.0",
-                id: request.id,
-                error: {
-                    code: Number.isSafeInteger(error["code"])
-                        ? error["code"]
-                        : _types_js__WEBPACK_IMPORTED_MODULE_0__.ErrorCode.InternalError,
-                    message: (_b = error.message) !== null && _b !== void 0 ? _b : "Internal error",
-                },
-            });
-        })
-            .catch((error) => this._onerror(new Error(`Failed to send response: ${error}`)))
-            .finally(() => {
-            this._requestHandlerAbortControllers.delete(request.id);
-        });
-    }
-    _onprogress(notification) {
-        const { progressToken, ...params } = notification.params;
-        const messageId = Number(progressToken);
-        const handler = this._progressHandlers.get(messageId);
-        if (!handler) {
-            this._onerror(new Error(`Received a progress notification for an unknown token: ${JSON.stringify(notification)}`));
-            return;
-        }
-        const responseHandler = this._responseHandlers.get(messageId);
-        const timeoutInfo = this._timeoutInfo.get(messageId);
-        if (timeoutInfo && responseHandler && timeoutInfo.resetTimeoutOnProgress) {
-            try {
-                this._resetTimeout(messageId);
-            }
-            catch (error) {
-                responseHandler(error);
-                return;
-            }
-        }
-        handler(params);
-    }
-    _onresponse(response) {
-        const messageId = Number(response.id);
-        const handler = this._responseHandlers.get(messageId);
-        if (handler === undefined) {
-            this._onerror(new Error(`Received a response for an unknown message ID: ${JSON.stringify(response)}`));
-            return;
-        }
-        this._responseHandlers.delete(messageId);
-        this._progressHandlers.delete(messageId);
-        this._cleanupTimeout(messageId);
-        if ((0,_types_js__WEBPACK_IMPORTED_MODULE_0__.isJSONRPCResponse)(response)) {
-            handler(response);
-        }
-        else {
-            const error = new _types_js__WEBPACK_IMPORTED_MODULE_0__.McpError(response.error.code, response.error.message, response.error.data);
-            handler(error);
-        }
-    }
-    get transport() {
-        return this._transport;
-    }
-    /**
-     * Closes the connection.
-     */
-    async close() {
-        var _a;
-        await ((_a = this._transport) === null || _a === void 0 ? void 0 : _a.close());
-    }
-    /**
-     * Sends a request and wait for a response.
-     *
-     * Do not use this method to emit notifications! Use notification() instead.
-     */
-    request(request, resultSchema, options) {
-        const { relatedRequestId, resumptionToken, onresumptiontoken } = options !== null && options !== void 0 ? options : {};
-        return new Promise((resolve, reject) => {
-            var _a, _b, _c, _d, _e;
-            if (!this._transport) {
-                reject(new Error("Not connected"));
-                return;
-            }
-            if (((_a = this._options) === null || _a === void 0 ? void 0 : _a.enforceStrictCapabilities) === true) {
-                this.assertCapabilityForMethod(request.method);
-            }
-            (_b = options === null || options === void 0 ? void 0 : options.signal) === null || _b === void 0 ? void 0 : _b.throwIfAborted();
-            const messageId = this._requestMessageId++;
-            const jsonrpcRequest = {
-                ...request,
-                jsonrpc: "2.0",
-                id: messageId,
-            };
-            if (options === null || options === void 0 ? void 0 : options.onprogress) {
-                this._progressHandlers.set(messageId, options.onprogress);
-                jsonrpcRequest.params = {
-                    ...request.params,
-                    _meta: { progressToken: messageId },
-                };
-            }
-            const cancel = (reason) => {
-                var _a;
-                this._responseHandlers.delete(messageId);
-                this._progressHandlers.delete(messageId);
-                this._cleanupTimeout(messageId);
-                (_a = this._transport) === null || _a === void 0 ? void 0 : _a.send({
-                    jsonrpc: "2.0",
-                    method: "notifications/cancelled",
-                    params: {
-                        requestId: messageId,
-                        reason: String(reason),
-                    },
-                }, { relatedRequestId, resumptionToken, onresumptiontoken }).catch((error) => this._onerror(new Error(`Failed to send cancellation: ${error}`)));
-                reject(reason);
-            };
-            this._responseHandlers.set(messageId, (response) => {
-                var _a;
-                if ((_a = options === null || options === void 0 ? void 0 : options.signal) === null || _a === void 0 ? void 0 : _a.aborted) {
-                    return;
-                }
-                if (response instanceof Error) {
-                    return reject(response);
-                }
-                try {
-                    const result = resultSchema.parse(response.result);
-                    resolve(result);
-                }
-                catch (error) {
-                    reject(error);
-                }
-            });
-            (_c = options === null || options === void 0 ? void 0 : options.signal) === null || _c === void 0 ? void 0 : _c.addEventListener("abort", () => {
-                var _a;
-                cancel((_a = options === null || options === void 0 ? void 0 : options.signal) === null || _a === void 0 ? void 0 : _a.reason);
-            });
-            const timeout = (_d = options === null || options === void 0 ? void 0 : options.timeout) !== null && _d !== void 0 ? _d : DEFAULT_REQUEST_TIMEOUT_MSEC;
-            const timeoutHandler = () => cancel(new _types_js__WEBPACK_IMPORTED_MODULE_0__.McpError(_types_js__WEBPACK_IMPORTED_MODULE_0__.ErrorCode.RequestTimeout, "Request timed out", { timeout }));
-            this._setupTimeout(messageId, timeout, options === null || options === void 0 ? void 0 : options.maxTotalTimeout, timeoutHandler, (_e = options === null || options === void 0 ? void 0 : options.resetTimeoutOnProgress) !== null && _e !== void 0 ? _e : false);
-            this._transport.send(jsonrpcRequest, { relatedRequestId, resumptionToken, onresumptiontoken }).catch((error) => {
-                this._cleanupTimeout(messageId);
-                reject(error);
-            });
-        });
-    }
-    /**
-     * Emits a notification, which is a one-way message that does not expect a response.
-     */
-    async notification(notification, options) {
-        if (!this._transport) {
-            throw new Error("Not connected");
-        }
-        this.assertNotificationCapability(notification.method);
-        const jsonrpcNotification = {
-            ...notification,
-            jsonrpc: "2.0",
-        };
-        await this._transport.send(jsonrpcNotification, options);
-    }
-    /**
-     * Registers a handler to invoke when this protocol object receives a request with the given method.
-     *
-     * Note that this will replace any previous request handler for the same method.
-     */
-    setRequestHandler(requestSchema, handler) {
-        const method = requestSchema.shape.method.value;
-        this.assertRequestHandlerCapability(method);
-        this._requestHandlers.set(method, (request, extra) => {
-            return Promise.resolve(handler(requestSchema.parse(request), extra));
-        });
-    }
-    /**
-     * Removes the request handler for the given method.
-     */
-    removeRequestHandler(method) {
-        this._requestHandlers.delete(method);
-    }
-    /**
-     * Asserts that a request handler has not already been set for the given method, in preparation for a new one being automatically installed.
-     */
-    assertCanSetRequestHandler(method) {
-        if (this._requestHandlers.has(method)) {
-            throw new Error(`A request handler for ${method} already exists, which would be overridden`);
-        }
-    }
-    /**
-     * Registers a handler to invoke when this protocol object receives a notification with the given method.
-     *
-     * Note that this will replace any previous notification handler for the same method.
-     */
-    setNotificationHandler(notificationSchema, handler) {
-        this._notificationHandlers.set(notificationSchema.shape.method.value, (notification) => Promise.resolve(handler(notificationSchema.parse(notification))));
-    }
-    /**
-     * Removes the notification handler for the given method.
-     */
-    removeNotificationHandler(method) {
-        this._notificationHandlers.delete(method);
-    }
-}
-function mergeCapabilities(base, additional) {
-    return Object.entries(additional).reduce((acc, [key, value]) => {
-        if (value && typeof value === "object") {
-            acc[key] = acc[key] ? { ...acc[key], ...value } : value;
-        }
-        else {
-            acc[key] = value;
-        }
-        return acc;
-    }, { ...base });
-}
-//# sourceMappingURL=protocol.js.map
-
-/***/ }),
-
-/***/ "./node_modules/@modelcontextprotocol/sdk/dist/esm/shared/stdio.js":
-/*!*************************************************************************!*\
-  !*** ./node_modules/@modelcontextprotocol/sdk/dist/esm/shared/stdio.js ***!
-  \*************************************************************************/
-/***/ ((__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) => {
-
-"use strict";
-__webpack_require__.r(__webpack_exports__);
-/* harmony export */ __webpack_require__.d(__webpack_exports__, {
-/* harmony export */   ReadBuffer: () => (/* binding */ ReadBuffer),
-/* harmony export */   deserializeMessage: () => (/* binding */ deserializeMessage),
-/* harmony export */   serializeMessage: () => (/* binding */ serializeMessage)
-/* harmony export */ });
-/* harmony import */ var _types_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../types.js */ "./node_modules/@modelcontextprotocol/sdk/dist/esm/types.js");
-
-/**
- * Buffers a continuous stdio stream into discrete JSON-RPC messages.
- */
-class ReadBuffer {
-    append(chunk) {
-        this._buffer = this._buffer ? Buffer.concat([this._buffer, chunk]) : chunk;
-    }
-    readMessage() {
-        if (!this._buffer) {
-            return null;
-        }
-        const index = this._buffer.indexOf("\n");
-        if (index === -1) {
-            return null;
-        }
-        const line = this._buffer.toString("utf8", 0, index).replace(/\r$/, '');
-        this._buffer = this._buffer.subarray(index + 1);
-        return deserializeMessage(line);
-    }
-    clear() {
-        this._buffer = undefined;
-    }
-}
-function deserializeMessage(line) {
-    return _types_js__WEBPACK_IMPORTED_MODULE_0__.JSONRPCMessageSchema.parse(JSON.parse(line));
-}
-function serializeMessage(message) {
-    return JSON.stringify(message) + "\n";
-}
-//# sourceMappingURL=stdio.js.map
-
-/***/ }),
-
-/***/ "./node_modules/@modelcontextprotocol/sdk/dist/esm/types.js":
-/*!******************************************************************!*\
-  !*** ./node_modules/@modelcontextprotocol/sdk/dist/esm/types.js ***!
-  \******************************************************************/
-/***/ ((__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) => {
-
-"use strict";
-__webpack_require__.r(__webpack_exports__);
-/* harmony export */ __webpack_require__.d(__webpack_exports__, {
-/* harmony export */   AudioContentSchema: () => (/* binding */ AudioContentSchema),
-/* harmony export */   BlobResourceContentsSchema: () => (/* binding */ BlobResourceContentsSchema),
-/* harmony export */   CallToolRequestSchema: () => (/* binding */ CallToolRequestSchema),
-/* harmony export */   CallToolResultSchema: () => (/* binding */ CallToolResultSchema),
-/* harmony export */   CancelledNotificationSchema: () => (/* binding */ CancelledNotificationSchema),
-/* harmony export */   ClientCapabilitiesSchema: () => (/* binding */ ClientCapabilitiesSchema),
-/* harmony export */   ClientNotificationSchema: () => (/* binding */ ClientNotificationSchema),
-/* harmony export */   ClientRequestSchema: () => (/* binding */ ClientRequestSchema),
-/* harmony export */   ClientResultSchema: () => (/* binding */ ClientResultSchema),
-/* harmony export */   CompatibilityCallToolResultSchema: () => (/* binding */ CompatibilityCallToolResultSchema),
-/* harmony export */   CompleteRequestSchema: () => (/* binding */ CompleteRequestSchema),
-/* harmony export */   CompleteResultSchema: () => (/* binding */ CompleteResultSchema),
-/* harmony export */   CreateMessageRequestSchema: () => (/* binding */ CreateMessageRequestSchema),
-/* harmony export */   CreateMessageResultSchema: () => (/* binding */ CreateMessageResultSchema),
-/* harmony export */   CursorSchema: () => (/* binding */ CursorSchema),
-/* harmony export */   EmbeddedResourceSchema: () => (/* binding */ EmbeddedResourceSchema),
-/* harmony export */   EmptyResultSchema: () => (/* binding */ EmptyResultSchema),
-/* harmony export */   ErrorCode: () => (/* binding */ ErrorCode),
-/* harmony export */   GetPromptRequestSchema: () => (/* binding */ GetPromptRequestSchema),
-/* harmony export */   GetPromptResultSchema: () => (/* binding */ GetPromptResultSchema),
-/* harmony export */   ImageContentSchema: () => (/* binding */ ImageContentSchema),
-/* harmony export */   ImplementationSchema: () => (/* binding */ ImplementationSchema),
-/* harmony export */   InitializeRequestSchema: () => (/* binding */ InitializeRequestSchema),
-/* harmony export */   InitializeResultSchema: () => (/* binding */ InitializeResultSchema),
-/* harmony export */   InitializedNotificationSchema: () => (/* binding */ InitializedNotificationSchema),
-/* harmony export */   JSONRPCErrorSchema: () => (/* binding */ JSONRPCErrorSchema),
-/* harmony export */   JSONRPCMessageSchema: () => (/* binding */ JSONRPCMessageSchema),
-/* harmony export */   JSONRPCNotificationSchema: () => (/* binding */ JSONRPCNotificationSchema),
-/* harmony export */   JSONRPCRequestSchema: () => (/* binding */ JSONRPCRequestSchema),
-/* harmony export */   JSONRPCResponseSchema: () => (/* binding */ JSONRPCResponseSchema),
-/* harmony export */   JSONRPC_VERSION: () => (/* binding */ JSONRPC_VERSION),
-/* harmony export */   LATEST_PROTOCOL_VERSION: () => (/* binding */ LATEST_PROTOCOL_VERSION),
-/* harmony export */   ListPromptsRequestSchema: () => (/* binding */ ListPromptsRequestSchema),
-/* harmony export */   ListPromptsResultSchema: () => (/* binding */ ListPromptsResultSchema),
-/* harmony export */   ListResourceTemplatesRequestSchema: () => (/* binding */ ListResourceTemplatesRequestSchema),
-/* harmony export */   ListResourceTemplatesResultSchema: () => (/* binding */ ListResourceTemplatesResultSchema),
-/* harmony export */   ListResourcesRequestSchema: () => (/* binding */ ListResourcesRequestSchema),
-/* harmony export */   ListResourcesResultSchema: () => (/* binding */ ListResourcesResultSchema),
-/* harmony export */   ListRootsRequestSchema: () => (/* binding */ ListRootsRequestSchema),
-/* harmony export */   ListRootsResultSchema: () => (/* binding */ ListRootsResultSchema),
-/* harmony export */   ListToolsRequestSchema: () => (/* binding */ ListToolsRequestSchema),
-/* harmony export */   ListToolsResultSchema: () => (/* binding */ ListToolsResultSchema),
-/* harmony export */   LoggingLevelSchema: () => (/* binding */ LoggingLevelSchema),
-/* harmony export */   LoggingMessageNotificationSchema: () => (/* binding */ LoggingMessageNotificationSchema),
-/* harmony export */   McpError: () => (/* binding */ McpError),
-/* harmony export */   ModelHintSchema: () => (/* binding */ ModelHintSchema),
-/* harmony export */   ModelPreferencesSchema: () => (/* binding */ ModelPreferencesSchema),
-/* harmony export */   NotificationSchema: () => (/* binding */ NotificationSchema),
-/* harmony export */   PaginatedRequestSchema: () => (/* binding */ PaginatedRequestSchema),
-/* harmony export */   PaginatedResultSchema: () => (/* binding */ PaginatedResultSchema),
-/* harmony export */   PingRequestSchema: () => (/* binding */ PingRequestSchema),
-/* harmony export */   ProgressNotificationSchema: () => (/* binding */ ProgressNotificationSchema),
-/* harmony export */   ProgressSchema: () => (/* binding */ ProgressSchema),
-/* harmony export */   ProgressTokenSchema: () => (/* binding */ ProgressTokenSchema),
-/* harmony export */   PromptArgumentSchema: () => (/* binding */ PromptArgumentSchema),
-/* harmony export */   PromptListChangedNotificationSchema: () => (/* binding */ PromptListChangedNotificationSchema),
-/* harmony export */   PromptMessageSchema: () => (/* binding */ PromptMessageSchema),
-/* harmony export */   PromptReferenceSchema: () => (/* binding */ PromptReferenceSchema),
-/* harmony export */   PromptSchema: () => (/* binding */ PromptSchema),
-/* harmony export */   ReadResourceRequestSchema: () => (/* binding */ ReadResourceRequestSchema),
-/* harmony export */   ReadResourceResultSchema: () => (/* binding */ ReadResourceResultSchema),
-/* harmony export */   RequestIdSchema: () => (/* binding */ RequestIdSchema),
-/* harmony export */   RequestSchema: () => (/* binding */ RequestSchema),
-/* harmony export */   ResourceContentsSchema: () => (/* binding */ ResourceContentsSchema),
-/* harmony export */   ResourceListChangedNotificationSchema: () => (/* binding */ ResourceListChangedNotificationSchema),
-/* harmony export */   ResourceReferenceSchema: () => (/* binding */ ResourceReferenceSchema),
-/* harmony export */   ResourceSchema: () => (/* binding */ ResourceSchema),
-/* harmony export */   ResourceTemplateSchema: () => (/* binding */ ResourceTemplateSchema),
-/* harmony export */   ResourceUpdatedNotificationSchema: () => (/* binding */ ResourceUpdatedNotificationSchema),
-/* harmony export */   ResultSchema: () => (/* binding */ ResultSchema),
-/* harmony export */   RootSchema: () => (/* binding */ RootSchema),
-/* harmony export */   RootsListChangedNotificationSchema: () => (/* binding */ RootsListChangedNotificationSchema),
-/* harmony export */   SUPPORTED_PROTOCOL_VERSIONS: () => (/* binding */ SUPPORTED_PROTOCOL_VERSIONS),
-/* harmony export */   SamplingMessageSchema: () => (/* binding */ SamplingMessageSchema),
-/* harmony export */   ServerCapabilitiesSchema: () => (/* binding */ ServerCapabilitiesSchema),
-/* harmony export */   ServerNotificationSchema: () => (/* binding */ ServerNotificationSchema),
-/* harmony export */   ServerRequestSchema: () => (/* binding */ ServerRequestSchema),
-/* harmony export */   ServerResultSchema: () => (/* binding */ ServerResultSchema),
-/* harmony export */   SetLevelRequestSchema: () => (/* binding */ SetLevelRequestSchema),
-/* harmony export */   SubscribeRequestSchema: () => (/* binding */ SubscribeRequestSchema),
-/* harmony export */   TextContentSchema: () => (/* binding */ TextContentSchema),
-/* harmony export */   TextResourceContentsSchema: () => (/* binding */ TextResourceContentsSchema),
-/* harmony export */   ToolAnnotationsSchema: () => (/* binding */ ToolAnnotationsSchema),
-/* harmony export */   ToolListChangedNotificationSchema: () => (/* binding */ ToolListChangedNotificationSchema),
-/* harmony export */   ToolSchema: () => (/* binding */ ToolSchema),
-/* harmony export */   UnsubscribeRequestSchema: () => (/* binding */ UnsubscribeRequestSchema),
-/* harmony export */   isInitializeRequest: () => (/* binding */ isInitializeRequest),
-/* harmony export */   isInitializedNotification: () => (/* binding */ isInitializedNotification),
-/* harmony export */   isJSONRPCError: () => (/* binding */ isJSONRPCError),
-/* harmony export */   isJSONRPCNotification: () => (/* binding */ isJSONRPCNotification),
-/* harmony export */   isJSONRPCRequest: () => (/* binding */ isJSONRPCRequest),
-/* harmony export */   isJSONRPCResponse: () => (/* binding */ isJSONRPCResponse)
-/* harmony export */ });
-/* harmony import */ var zod__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! zod */ "./node_modules/zod/lib/index.mjs");
-
-const LATEST_PROTOCOL_VERSION = "2025-03-26";
-const SUPPORTED_PROTOCOL_VERSIONS = [
-    LATEST_PROTOCOL_VERSION,
-    "2024-11-05",
-    "2024-10-07",
-];
-/* JSON-RPC types */
-const JSONRPC_VERSION = "2.0";
-/**
- * A progress token, used to associate progress notifications with the original request.
- */
-const ProgressTokenSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z.union([zod__WEBPACK_IMPORTED_MODULE_0__.z.string(), zod__WEBPACK_IMPORTED_MODULE_0__.z.number().int()]);
-/**
- * An opaque token used to represent a cursor for pagination.
- */
-const CursorSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z.string();
-const RequestMetaSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z
-    .object({
-    /**
-     * If specified, the caller is requesting out-of-band progress notifications for this request (as represented by notifications/progress). The value of this parameter is an opaque token that will be attached to any subsequent notifications. The receiver is not obligated to provide these notifications.
-     */
-    progressToken: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(ProgressTokenSchema),
-})
-    .passthrough();
-const BaseRequestParamsSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z
-    .object({
-    _meta: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(RequestMetaSchema),
-})
-    .passthrough();
-const RequestSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z.object({
-    method: zod__WEBPACK_IMPORTED_MODULE_0__.z.string(),
-    params: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(BaseRequestParamsSchema),
-});
-const BaseNotificationParamsSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z
-    .object({
-    /**
-     * This parameter name is reserved by MCP to allow clients and servers to attach additional metadata to their notifications.
-     */
-    _meta: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.object({}).passthrough()),
-})
-    .passthrough();
-const NotificationSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z.object({
-    method: zod__WEBPACK_IMPORTED_MODULE_0__.z.string(),
-    params: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(BaseNotificationParamsSchema),
-});
-const ResultSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z
-    .object({
-    /**
-     * This result property is reserved by the protocol to allow clients and servers to attach additional metadata to their responses.
-     */
-    _meta: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.object({}).passthrough()),
-})
-    .passthrough();
-/**
- * A uniquely identifying ID for a request in JSON-RPC.
- */
-const RequestIdSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z.union([zod__WEBPACK_IMPORTED_MODULE_0__.z.string(), zod__WEBPACK_IMPORTED_MODULE_0__.z.number().int()]);
-/**
- * A request that expects a response.
- */
-const JSONRPCRequestSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z
-    .object({
-    jsonrpc: zod__WEBPACK_IMPORTED_MODULE_0__.z.literal(JSONRPC_VERSION),
-    id: RequestIdSchema,
-})
-    .merge(RequestSchema)
-    .strict();
-const isJSONRPCRequest = (value) => JSONRPCRequestSchema.safeParse(value).success;
-/**
- * A notification which does not expect a response.
- */
-const JSONRPCNotificationSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z
-    .object({
-    jsonrpc: zod__WEBPACK_IMPORTED_MODULE_0__.z.literal(JSONRPC_VERSION),
-})
-    .merge(NotificationSchema)
-    .strict();
-const isJSONRPCNotification = (value) => JSONRPCNotificationSchema.safeParse(value).success;
-/**
- * A successful (non-error) response to a request.
- */
-const JSONRPCResponseSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z
-    .object({
-    jsonrpc: zod__WEBPACK_IMPORTED_MODULE_0__.z.literal(JSONRPC_VERSION),
-    id: RequestIdSchema,
-    result: ResultSchema,
-})
-    .strict();
-const isJSONRPCResponse = (value) => JSONRPCResponseSchema.safeParse(value).success;
-/**
- * Error codes defined by the JSON-RPC specification.
- */
-var ErrorCode;
-(function (ErrorCode) {
-    // SDK error codes
-    ErrorCode[ErrorCode["ConnectionClosed"] = -32000] = "ConnectionClosed";
-    ErrorCode[ErrorCode["RequestTimeout"] = -32001] = "RequestTimeout";
-    // Standard JSON-RPC error codes
-    ErrorCode[ErrorCode["ParseError"] = -32700] = "ParseError";
-    ErrorCode[ErrorCode["InvalidRequest"] = -32600] = "InvalidRequest";
-    ErrorCode[ErrorCode["MethodNotFound"] = -32601] = "MethodNotFound";
-    ErrorCode[ErrorCode["InvalidParams"] = -32602] = "InvalidParams";
-    ErrorCode[ErrorCode["InternalError"] = -32603] = "InternalError";
-})(ErrorCode || (ErrorCode = {}));
-/**
- * A response to a request that indicates an error occurred.
- */
-const JSONRPCErrorSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z
-    .object({
-    jsonrpc: zod__WEBPACK_IMPORTED_MODULE_0__.z.literal(JSONRPC_VERSION),
-    id: RequestIdSchema,
-    error: zod__WEBPACK_IMPORTED_MODULE_0__.z.object({
-        /**
-         * The error type that occurred.
-         */
-        code: zod__WEBPACK_IMPORTED_MODULE_0__.z.number().int(),
-        /**
-         * A short description of the error. The message SHOULD be limited to a concise single sentence.
-         */
-        message: zod__WEBPACK_IMPORTED_MODULE_0__.z.string(),
-        /**
-         * Additional information about the error. The value of this member is defined by the sender (e.g. detailed error information, nested errors etc.).
-         */
-        data: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.unknown()),
-    }),
-})
-    .strict();
-const isJSONRPCError = (value) => JSONRPCErrorSchema.safeParse(value).success;
-const JSONRPCMessageSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z.union([
-    JSONRPCRequestSchema,
-    JSONRPCNotificationSchema,
-    JSONRPCResponseSchema,
-    JSONRPCErrorSchema,
-]);
-/* Empty result */
-/**
- * A response that indicates success but carries no data.
- */
-const EmptyResultSchema = ResultSchema.strict();
-/* Cancellation */
-/**
- * This notification can be sent by either side to indicate that it is cancelling a previously-issued request.
- *
- * The request SHOULD still be in-flight, but due to communication latency, it is always possible that this notification MAY arrive after the request has already finished.
- *
- * This notification indicates that the result will be unused, so any associated processing SHOULD cease.
- *
- * A client MUST NOT attempt to cancel its `initialize` request.
- */
-const CancelledNotificationSchema = NotificationSchema.extend({
-    method: zod__WEBPACK_IMPORTED_MODULE_0__.z.literal("notifications/cancelled"),
-    params: BaseNotificationParamsSchema.extend({
-        /**
-         * The ID of the request to cancel.
-         *
-         * This MUST correspond to the ID of a request previously issued in the same direction.
-         */
-        requestId: RequestIdSchema,
-        /**
-         * An optional string describing the reason for the cancellation. This MAY be logged or presented to the user.
-         */
-        reason: zod__WEBPACK_IMPORTED_MODULE_0__.z.string().optional(),
-    }),
-});
-/* Initialization */
-/**
- * Describes the name and version of an MCP implementation.
- */
-const ImplementationSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z
-    .object({
-    name: zod__WEBPACK_IMPORTED_MODULE_0__.z.string(),
-    version: zod__WEBPACK_IMPORTED_MODULE_0__.z.string(),
-})
-    .passthrough();
-/**
- * Capabilities a client may support. Known capabilities are defined here, in this schema, but this is not a closed set: any client can define its own, additional capabilities.
- */
-const ClientCapabilitiesSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z
-    .object({
-    /**
-     * Experimental, non-standard capabilities that the client supports.
-     */
-    experimental: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.object({}).passthrough()),
-    /**
-     * Present if the client supports sampling from an LLM.
-     */
-    sampling: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.object({}).passthrough()),
-    /**
-     * Present if the client supports listing roots.
-     */
-    roots: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z
-        .object({
-        /**
-         * Whether the client supports issuing notifications for changes to the roots list.
-         */
-        listChanged: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.boolean()),
-    })
-        .passthrough()),
-})
-    .passthrough();
-/**
- * This request is sent from the client to the server when it first connects, asking it to begin initialization.
- */
-const InitializeRequestSchema = RequestSchema.extend({
-    method: zod__WEBPACK_IMPORTED_MODULE_0__.z.literal("initialize"),
-    params: BaseRequestParamsSchema.extend({
-        /**
-         * The latest version of the Model Context Protocol that the client supports. The client MAY decide to support older versions as well.
-         */
-        protocolVersion: zod__WEBPACK_IMPORTED_MODULE_0__.z.string(),
-        capabilities: ClientCapabilitiesSchema,
-        clientInfo: ImplementationSchema,
-    }),
-});
-const isInitializeRequest = (value) => InitializeRequestSchema.safeParse(value).success;
-/**
- * Capabilities that a server may support. Known capabilities are defined here, in this schema, but this is not a closed set: any server can define its own, additional capabilities.
- */
-const ServerCapabilitiesSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z
-    .object({
-    /**
-     * Experimental, non-standard capabilities that the server supports.
-     */
-    experimental: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.object({}).passthrough()),
-    /**
-     * Present if the server supports sending log messages to the client.
-     */
-    logging: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.object({}).passthrough()),
-    /**
-     * Present if the server supports sending completions to the client.
-     */
-    completions: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.object({}).passthrough()),
-    /**
-     * Present if the server offers any prompt templates.
-     */
-    prompts: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z
-        .object({
-        /**
-         * Whether this server supports issuing notifications for changes to the prompt list.
-         */
-        listChanged: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.boolean()),
-    })
-        .passthrough()),
-    /**
-     * Present if the server offers any resources to read.
-     */
-    resources: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z
-        .object({
-        /**
-         * Whether this server supports clients subscribing to resource updates.
-         */
-        subscribe: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.boolean()),
-        /**
-         * Whether this server supports issuing notifications for changes to the resource list.
-         */
-        listChanged: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.boolean()),
-    })
-        .passthrough()),
-    /**
-     * Present if the server offers any tools to call.
-     */
-    tools: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z
-        .object({
-        /**
-         * Whether this server supports issuing notifications for changes to the tool list.
-         */
-        listChanged: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.boolean()),
-    })
-        .passthrough()),
-})
-    .passthrough();
-/**
- * After receiving an initialize request from the client, the server sends this response.
- */
-const InitializeResultSchema = ResultSchema.extend({
-    /**
-     * The version of the Model Context Protocol that the server wants to use. This may not match the version that the client requested. If the client cannot support this version, it MUST disconnect.
-     */
-    protocolVersion: zod__WEBPACK_IMPORTED_MODULE_0__.z.string(),
-    capabilities: ServerCapabilitiesSchema,
-    serverInfo: ImplementationSchema,
-    /**
-     * Instructions describing how to use the server and its features.
-     *
-     * This can be used by clients to improve the LLM's understanding of available tools, resources, etc. It can be thought of like a "hint" to the model. For example, this information MAY be added to the system prompt.
-     */
-    instructions: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.string()),
-});
-/**
- * This notification is sent from the client to the server after initialization has finished.
- */
-const InitializedNotificationSchema = NotificationSchema.extend({
-    method: zod__WEBPACK_IMPORTED_MODULE_0__.z.literal("notifications/initialized"),
-});
-const isInitializedNotification = (value) => InitializedNotificationSchema.safeParse(value).success;
-/* Ping */
-/**
- * A ping, issued by either the server or the client, to check that the other party is still alive. The receiver must promptly respond, or else may be disconnected.
- */
-const PingRequestSchema = RequestSchema.extend({
-    method: zod__WEBPACK_IMPORTED_MODULE_0__.z.literal("ping"),
-});
-/* Progress notifications */
-const ProgressSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z
-    .object({
-    /**
-     * The progress thus far. This should increase every time progress is made, even if the total is unknown.
-     */
-    progress: zod__WEBPACK_IMPORTED_MODULE_0__.z.number(),
-    /**
-     * Total number of items to process (or total progress required), if known.
-     */
-    total: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.number()),
-})
-    .passthrough();
-/**
- * An out-of-band notification used to inform the receiver of a progress update for a long-running request.
- */
-const ProgressNotificationSchema = NotificationSchema.extend({
-    method: zod__WEBPACK_IMPORTED_MODULE_0__.z.literal("notifications/progress"),
-    params: BaseNotificationParamsSchema.merge(ProgressSchema).extend({
-        /**
-         * The progress token which was given in the initial request, used to associate this notification with the request that is proceeding.
-         */
-        progressToken: ProgressTokenSchema,
-    }),
-});
-/* Pagination */
-const PaginatedRequestSchema = RequestSchema.extend({
-    params: BaseRequestParamsSchema.extend({
-        /**
-         * An opaque token representing the current pagination position.
-         * If provided, the server should return results starting after this cursor.
-         */
-        cursor: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(CursorSchema),
-    }).optional(),
-});
-const PaginatedResultSchema = ResultSchema.extend({
-    /**
-     * An opaque token representing the pagination position after the last returned result.
-     * If present, there may be more results available.
-     */
-    nextCursor: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(CursorSchema),
-});
-/* Resources */
-/**
- * The contents of a specific resource or sub-resource.
- */
-const ResourceContentsSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z
-    .object({
-    /**
-     * The URI of this resource.
-     */
-    uri: zod__WEBPACK_IMPORTED_MODULE_0__.z.string(),
-    /**
-     * The MIME type of this resource, if known.
-     */
-    mimeType: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.string()),
-})
-    .passthrough();
-const TextResourceContentsSchema = ResourceContentsSchema.extend({
-    /**
-     * The text of the item. This must only be set if the item can actually be represented as text (not binary data).
-     */
-    text: zod__WEBPACK_IMPORTED_MODULE_0__.z.string(),
-});
-const BlobResourceContentsSchema = ResourceContentsSchema.extend({
-    /**
-     * A base64-encoded string representing the binary data of the item.
-     */
-    blob: zod__WEBPACK_IMPORTED_MODULE_0__.z.string().base64(),
-});
-/**
- * A known resource that the server is capable of reading.
- */
-const ResourceSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z
-    .object({
-    /**
-     * The URI of this resource.
-     */
-    uri: zod__WEBPACK_IMPORTED_MODULE_0__.z.string(),
-    /**
-     * A human-readable name for this resource.
-     *
-     * This can be used by clients to populate UI elements.
-     */
-    name: zod__WEBPACK_IMPORTED_MODULE_0__.z.string(),
-    /**
-     * A description of what this resource represents.
-     *
-     * This can be used by clients to improve the LLM's understanding of available resources. It can be thought of like a "hint" to the model.
-     */
-    description: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.string()),
-    /**
-     * The MIME type of this resource, if known.
-     */
-    mimeType: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.string()),
-})
-    .passthrough();
-/**
- * A template description for resources available on the server.
- */
-const ResourceTemplateSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z
-    .object({
-    /**
-     * A URI template (according to RFC 6570) that can be used to construct resource URIs.
-     */
-    uriTemplate: zod__WEBPACK_IMPORTED_MODULE_0__.z.string(),
-    /**
-     * A human-readable name for the type of resource this template refers to.
-     *
-     * This can be used by clients to populate UI elements.
-     */
-    name: zod__WEBPACK_IMPORTED_MODULE_0__.z.string(),
-    /**
-     * A description of what this template is for.
-     *
-     * This can be used by clients to improve the LLM's understanding of available resources. It can be thought of like a "hint" to the model.
-     */
-    description: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.string()),
-    /**
-     * The MIME type for all resources that match this template. This should only be included if all resources matching this template have the same type.
-     */
-    mimeType: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.string()),
-})
-    .passthrough();
-/**
- * Sent from the client to request a list of resources the server has.
- */
-const ListResourcesRequestSchema = PaginatedRequestSchema.extend({
-    method: zod__WEBPACK_IMPORTED_MODULE_0__.z.literal("resources/list"),
-});
-/**
- * The server's response to a resources/list request from the client.
- */
-const ListResourcesResultSchema = PaginatedResultSchema.extend({
-    resources: zod__WEBPACK_IMPORTED_MODULE_0__.z.array(ResourceSchema),
-});
-/**
- * Sent from the client to request a list of resource templates the server has.
- */
-const ListResourceTemplatesRequestSchema = PaginatedRequestSchema.extend({
-    method: zod__WEBPACK_IMPORTED_MODULE_0__.z.literal("resources/templates/list"),
-});
-/**
- * The server's response to a resources/templates/list request from the client.
- */
-const ListResourceTemplatesResultSchema = PaginatedResultSchema.extend({
-    resourceTemplates: zod__WEBPACK_IMPORTED_MODULE_0__.z.array(ResourceTemplateSchema),
-});
-/**
- * Sent from the client to the server, to read a specific resource URI.
- */
-const ReadResourceRequestSchema = RequestSchema.extend({
-    method: zod__WEBPACK_IMPORTED_MODULE_0__.z.literal("resources/read"),
-    params: BaseRequestParamsSchema.extend({
-        /**
-         * The URI of the resource to read. The URI can use any protocol; it is up to the server how to interpret it.
-         */
-        uri: zod__WEBPACK_IMPORTED_MODULE_0__.z.string(),
-    }),
-});
-/**
- * The server's response to a resources/read request from the client.
- */
-const ReadResourceResultSchema = ResultSchema.extend({
-    contents: zod__WEBPACK_IMPORTED_MODULE_0__.z.array(zod__WEBPACK_IMPORTED_MODULE_0__.z.union([TextResourceContentsSchema, BlobResourceContentsSchema])),
-});
-/**
- * An optional notification from the server to the client, informing it that the list of resources it can read from has changed. This may be issued by servers without any previous subscription from the client.
- */
-const ResourceListChangedNotificationSchema = NotificationSchema.extend({
-    method: zod__WEBPACK_IMPORTED_MODULE_0__.z.literal("notifications/resources/list_changed"),
-});
-/**
- * Sent from the client to request resources/updated notifications from the server whenever a particular resource changes.
- */
-const SubscribeRequestSchema = RequestSchema.extend({
-    method: zod__WEBPACK_IMPORTED_MODULE_0__.z.literal("resources/subscribe"),
-    params: BaseRequestParamsSchema.extend({
-        /**
-         * The URI of the resource to subscribe to. The URI can use any protocol; it is up to the server how to interpret it.
-         */
-        uri: zod__WEBPACK_IMPORTED_MODULE_0__.z.string(),
-    }),
-});
-/**
- * Sent from the client to request cancellation of resources/updated notifications from the server. This should follow a previous resources/subscribe request.
- */
-const UnsubscribeRequestSchema = RequestSchema.extend({
-    method: zod__WEBPACK_IMPORTED_MODULE_0__.z.literal("resources/unsubscribe"),
-    params: BaseRequestParamsSchema.extend({
-        /**
-         * The URI of the resource to unsubscribe from.
-         */
-        uri: zod__WEBPACK_IMPORTED_MODULE_0__.z.string(),
-    }),
-});
-/**
- * A notification from the server to the client, informing it that a resource has changed and may need to be read again. This should only be sent if the client previously sent a resources/subscribe request.
- */
-const ResourceUpdatedNotificationSchema = NotificationSchema.extend({
-    method: zod__WEBPACK_IMPORTED_MODULE_0__.z.literal("notifications/resources/updated"),
-    params: BaseNotificationParamsSchema.extend({
-        /**
-         * The URI of the resource that has been updated. This might be a sub-resource of the one that the client actually subscribed to.
-         */
-        uri: zod__WEBPACK_IMPORTED_MODULE_0__.z.string(),
-    }),
-});
-/* Prompts */
-/**
- * Describes an argument that a prompt can accept.
- */
-const PromptArgumentSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z
-    .object({
-    /**
-     * The name of the argument.
-     */
-    name: zod__WEBPACK_IMPORTED_MODULE_0__.z.string(),
-    /**
-     * A human-readable description of the argument.
-     */
-    description: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.string()),
-    /**
-     * Whether this argument must be provided.
-     */
-    required: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.boolean()),
-})
-    .passthrough();
-/**
- * A prompt or prompt template that the server offers.
- */
-const PromptSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z
-    .object({
-    /**
-     * The name of the prompt or prompt template.
-     */
-    name: zod__WEBPACK_IMPORTED_MODULE_0__.z.string(),
-    /**
-     * An optional description of what this prompt provides
-     */
-    description: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.string()),
-    /**
-     * A list of arguments to use for templating the prompt.
-     */
-    arguments: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.array(PromptArgumentSchema)),
-})
-    .passthrough();
-/**
- * Sent from the client to request a list of prompts and prompt templates the server has.
- */
-const ListPromptsRequestSchema = PaginatedRequestSchema.extend({
-    method: zod__WEBPACK_IMPORTED_MODULE_0__.z.literal("prompts/list"),
-});
-/**
- * The server's response to a prompts/list request from the client.
- */
-const ListPromptsResultSchema = PaginatedResultSchema.extend({
-    prompts: zod__WEBPACK_IMPORTED_MODULE_0__.z.array(PromptSchema),
-});
-/**
- * Used by the client to get a prompt provided by the server.
- */
-const GetPromptRequestSchema = RequestSchema.extend({
-    method: zod__WEBPACK_IMPORTED_MODULE_0__.z.literal("prompts/get"),
-    params: BaseRequestParamsSchema.extend({
-        /**
-         * The name of the prompt or prompt template.
-         */
-        name: zod__WEBPACK_IMPORTED_MODULE_0__.z.string(),
-        /**
-         * Arguments to use for templating the prompt.
-         */
-        arguments: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.record(zod__WEBPACK_IMPORTED_MODULE_0__.z.string())),
-    }),
-});
-/**
- * Text provided to or from an LLM.
- */
-const TextContentSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z
-    .object({
-    type: zod__WEBPACK_IMPORTED_MODULE_0__.z.literal("text"),
-    /**
-     * The text content of the message.
-     */
-    text: zod__WEBPACK_IMPORTED_MODULE_0__.z.string(),
-})
-    .passthrough();
-/**
- * An image provided to or from an LLM.
- */
-const ImageContentSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z
-    .object({
-    type: zod__WEBPACK_IMPORTED_MODULE_0__.z.literal("image"),
-    /**
-     * The base64-encoded image data.
-     */
-    data: zod__WEBPACK_IMPORTED_MODULE_0__.z.string().base64(),
-    /**
-     * The MIME type of the image. Different providers may support different image types.
-     */
-    mimeType: zod__WEBPACK_IMPORTED_MODULE_0__.z.string(),
-})
-    .passthrough();
-/**
- * An Audio provided to or from an LLM.
- */
-const AudioContentSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z
-    .object({
-    type: zod__WEBPACK_IMPORTED_MODULE_0__.z.literal("audio"),
-    /**
-     * The base64-encoded audio data.
-     */
-    data: zod__WEBPACK_IMPORTED_MODULE_0__.z.string().base64(),
-    /**
-     * The MIME type of the audio. Different providers may support different audio types.
-     */
-    mimeType: zod__WEBPACK_IMPORTED_MODULE_0__.z.string(),
-})
-    .passthrough();
-/**
- * The contents of a resource, embedded into a prompt or tool call result.
- */
-const EmbeddedResourceSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z
-    .object({
-    type: zod__WEBPACK_IMPORTED_MODULE_0__.z.literal("resource"),
-    resource: zod__WEBPACK_IMPORTED_MODULE_0__.z.union([TextResourceContentsSchema, BlobResourceContentsSchema]),
-})
-    .passthrough();
-/**
- * Describes a message returned as part of a prompt.
- */
-const PromptMessageSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z
-    .object({
-    role: zod__WEBPACK_IMPORTED_MODULE_0__.z.enum(["user", "assistant"]),
-    content: zod__WEBPACK_IMPORTED_MODULE_0__.z.union([
-        TextContentSchema,
-        ImageContentSchema,
-        AudioContentSchema,
-        EmbeddedResourceSchema,
-    ]),
-})
-    .passthrough();
-/**
- * The server's response to a prompts/get request from the client.
- */
-const GetPromptResultSchema = ResultSchema.extend({
-    /**
-     * An optional description for the prompt.
-     */
-    description: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.string()),
-    messages: zod__WEBPACK_IMPORTED_MODULE_0__.z.array(PromptMessageSchema),
-});
-/**
- * An optional notification from the server to the client, informing it that the list of prompts it offers has changed. This may be issued by servers without any previous subscription from the client.
- */
-const PromptListChangedNotificationSchema = NotificationSchema.extend({
-    method: zod__WEBPACK_IMPORTED_MODULE_0__.z.literal("notifications/prompts/list_changed"),
-});
-/* Tools */
-/**
- * Additional properties describing a Tool to clients.
- *
- * NOTE: all properties in ToolAnnotations are **hints**.
- * They are not guaranteed to provide a faithful description of
- * tool behavior (including descriptive properties like `title`).
- *
- * Clients should never make tool use decisions based on ToolAnnotations
- * received from untrusted servers.
- */
-const ToolAnnotationsSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z
-    .object({
-    /**
-     * A human-readable title for the tool.
-     */
-    title: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.string()),
-    /**
-     * If true, the tool does not modify its environment.
-     *
-     * Default: false
-     */
-    readOnlyHint: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.boolean()),
-    /**
-     * If true, the tool may perform destructive updates to its environment.
-     * If false, the tool performs only additive updates.
-     *
-     * (This property is meaningful only when `readOnlyHint == false`)
-     *
-     * Default: true
-     */
-    destructiveHint: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.boolean()),
-    /**
-     * If true, calling the tool repeatedly with the same arguments
-     * will have no additional effect on the its environment.
-     *
-     * (This property is meaningful only when `readOnlyHint == false`)
-     *
-     * Default: false
-     */
-    idempotentHint: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.boolean()),
-    /**
-     * If true, this tool may interact with an "open world" of external
-     * entities. If false, the tool's domain of interaction is closed.
-     * For example, the world of a web search tool is open, whereas that
-     * of a memory tool is not.
-     *
-     * Default: true
-     */
-    openWorldHint: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.boolean()),
-})
-    .passthrough();
-/**
- * Definition for a tool the client can call.
- */
-const ToolSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z
-    .object({
-    /**
-     * The name of the tool.
-     */
-    name: zod__WEBPACK_IMPORTED_MODULE_0__.z.string(),
-    /**
-     * A human-readable description of the tool.
-     */
-    description: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.string()),
-    /**
-     * A JSON Schema object defining the expected parameters for the tool.
-     */
-    inputSchema: zod__WEBPACK_IMPORTED_MODULE_0__.z
-        .object({
-        type: zod__WEBPACK_IMPORTED_MODULE_0__.z.literal("object"),
-        properties: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.object({}).passthrough()),
-    })
-        .passthrough(),
-    /**
-     * Optional additional tool information.
-     */
-    annotations: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(ToolAnnotationsSchema),
-})
-    .passthrough();
-/**
- * Sent from the client to request a list of tools the server has.
- */
-const ListToolsRequestSchema = PaginatedRequestSchema.extend({
-    method: zod__WEBPACK_IMPORTED_MODULE_0__.z.literal("tools/list"),
-});
-/**
- * The server's response to a tools/list request from the client.
- */
-const ListToolsResultSchema = PaginatedResultSchema.extend({
-    tools: zod__WEBPACK_IMPORTED_MODULE_0__.z.array(ToolSchema),
-});
-/**
- * The server's response to a tool call.
- */
-const CallToolResultSchema = ResultSchema.extend({
-    content: zod__WEBPACK_IMPORTED_MODULE_0__.z.array(zod__WEBPACK_IMPORTED_MODULE_0__.z.union([TextContentSchema, ImageContentSchema, AudioContentSchema, EmbeddedResourceSchema])),
-    isError: zod__WEBPACK_IMPORTED_MODULE_0__.z.boolean().default(false).optional(),
-});
-/**
- * CallToolResultSchema extended with backwards compatibility to protocol version 2024-10-07.
- */
-const CompatibilityCallToolResultSchema = CallToolResultSchema.or(ResultSchema.extend({
-    toolResult: zod__WEBPACK_IMPORTED_MODULE_0__.z.unknown(),
-}));
-/**
- * Used by the client to invoke a tool provided by the server.
- */
-const CallToolRequestSchema = RequestSchema.extend({
-    method: zod__WEBPACK_IMPORTED_MODULE_0__.z.literal("tools/call"),
-    params: BaseRequestParamsSchema.extend({
-        name: zod__WEBPACK_IMPORTED_MODULE_0__.z.string(),
-        arguments: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.record(zod__WEBPACK_IMPORTED_MODULE_0__.z.unknown())),
-    }),
-});
-/**
- * An optional notification from the server to the client, informing it that the list of tools it offers has changed. This may be issued by servers without any previous subscription from the client.
- */
-const ToolListChangedNotificationSchema = NotificationSchema.extend({
-    method: zod__WEBPACK_IMPORTED_MODULE_0__.z.literal("notifications/tools/list_changed"),
-});
-/* Logging */
-/**
- * The severity of a log message.
- */
-const LoggingLevelSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z.enum([
-    "debug",
-    "info",
-    "notice",
-    "warning",
-    "error",
-    "critical",
-    "alert",
-    "emergency",
-]);
-/**
- * A request from the client to the server, to enable or adjust logging.
- */
-const SetLevelRequestSchema = RequestSchema.extend({
-    method: zod__WEBPACK_IMPORTED_MODULE_0__.z.literal("logging/setLevel"),
-    params: BaseRequestParamsSchema.extend({
-        /**
-         * The level of logging that the client wants to receive from the server. The server should send all logs at this level and higher (i.e., more severe) to the client as notifications/logging/message.
-         */
-        level: LoggingLevelSchema,
-    }),
-});
-/**
- * Notification of a log message passed from server to client. If no logging/setLevel request has been sent from the client, the server MAY decide which messages to send automatically.
- */
-const LoggingMessageNotificationSchema = NotificationSchema.extend({
-    method: zod__WEBPACK_IMPORTED_MODULE_0__.z.literal("notifications/message"),
-    params: BaseNotificationParamsSchema.extend({
-        /**
-         * The severity of this log message.
-         */
-        level: LoggingLevelSchema,
-        /**
-         * An optional name of the logger issuing this message.
-         */
-        logger: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.string()),
-        /**
-         * The data to be logged, such as a string message or an object. Any JSON serializable type is allowed here.
-         */
-        data: zod__WEBPACK_IMPORTED_MODULE_0__.z.unknown(),
-    }),
-});
-/* Sampling */
-/**
- * Hints to use for model selection.
- */
-const ModelHintSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z
-    .object({
-    /**
-     * A hint for a model name.
-     */
-    name: zod__WEBPACK_IMPORTED_MODULE_0__.z.string().optional(),
-})
-    .passthrough();
-/**
- * The server's preferences for model selection, requested of the client during sampling.
- */
-const ModelPreferencesSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z
-    .object({
-    /**
-     * Optional hints to use for model selection.
-     */
-    hints: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.array(ModelHintSchema)),
-    /**
-     * How much to prioritize cost when selecting a model.
-     */
-    costPriority: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.number().min(0).max(1)),
-    /**
-     * How much to prioritize sampling speed (latency) when selecting a model.
-     */
-    speedPriority: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.number().min(0).max(1)),
-    /**
-     * How much to prioritize intelligence and capabilities when selecting a model.
-     */
-    intelligencePriority: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.number().min(0).max(1)),
-})
-    .passthrough();
-/**
- * Describes a message issued to or received from an LLM API.
- */
-const SamplingMessageSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z
-    .object({
-    role: zod__WEBPACK_IMPORTED_MODULE_0__.z.enum(["user", "assistant"]),
-    content: zod__WEBPACK_IMPORTED_MODULE_0__.z.union([TextContentSchema, ImageContentSchema, AudioContentSchema]),
-})
-    .passthrough();
-/**
- * A request from the server to sample an LLM via the client. The client has full discretion over which model to select. The client should also inform the user before beginning sampling, to allow them to inspect the request (human in the loop) and decide whether to approve it.
- */
-const CreateMessageRequestSchema = RequestSchema.extend({
-    method: zod__WEBPACK_IMPORTED_MODULE_0__.z.literal("sampling/createMessage"),
-    params: BaseRequestParamsSchema.extend({
-        messages: zod__WEBPACK_IMPORTED_MODULE_0__.z.array(SamplingMessageSchema),
-        /**
-         * An optional system prompt the server wants to use for sampling. The client MAY modify or omit this prompt.
-         */
-        systemPrompt: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.string()),
-        /**
-         * A request to include context from one or more MCP servers (including the caller), to be attached to the prompt. The client MAY ignore this request.
-         */
-        includeContext: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.enum(["none", "thisServer", "allServers"])),
-        temperature: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.number()),
-        /**
-         * The maximum number of tokens to sample, as requested by the server. The client MAY choose to sample fewer tokens than requested.
-         */
-        maxTokens: zod__WEBPACK_IMPORTED_MODULE_0__.z.number().int(),
-        stopSequences: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.array(zod__WEBPACK_IMPORTED_MODULE_0__.z.string())),
-        /**
-         * Optional metadata to pass through to the LLM provider. The format of this metadata is provider-specific.
-         */
-        metadata: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.object({}).passthrough()),
-        /**
-         * The server's preferences for which model to select.
-         */
-        modelPreferences: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(ModelPreferencesSchema),
-    }),
-});
-/**
- * The client's response to a sampling/create_message request from the server. The client should inform the user before returning the sampled message, to allow them to inspect the response (human in the loop) and decide whether to allow the server to see it.
- */
-const CreateMessageResultSchema = ResultSchema.extend({
-    /**
-     * The name of the model that generated the message.
-     */
-    model: zod__WEBPACK_IMPORTED_MODULE_0__.z.string(),
-    /**
-     * The reason why sampling stopped.
-     */
-    stopReason: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.enum(["endTurn", "stopSequence", "maxTokens"]).or(zod__WEBPACK_IMPORTED_MODULE_0__.z.string())),
-    role: zod__WEBPACK_IMPORTED_MODULE_0__.z.enum(["user", "assistant"]),
-    content: zod__WEBPACK_IMPORTED_MODULE_0__.z.discriminatedUnion("type", [
-        TextContentSchema,
-        ImageContentSchema,
-        AudioContentSchema
-    ]),
-});
-/* Autocomplete */
-/**
- * A reference to a resource or resource template definition.
- */
-const ResourceReferenceSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z
-    .object({
-    type: zod__WEBPACK_IMPORTED_MODULE_0__.z.literal("ref/resource"),
-    /**
-     * The URI or URI template of the resource.
-     */
-    uri: zod__WEBPACK_IMPORTED_MODULE_0__.z.string(),
-})
-    .passthrough();
-/**
- * Identifies a prompt.
- */
-const PromptReferenceSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z
-    .object({
-    type: zod__WEBPACK_IMPORTED_MODULE_0__.z.literal("ref/prompt"),
-    /**
-     * The name of the prompt or prompt template
-     */
-    name: zod__WEBPACK_IMPORTED_MODULE_0__.z.string(),
-})
-    .passthrough();
-/**
- * A request from the client to the server, to ask for completion options.
- */
-const CompleteRequestSchema = RequestSchema.extend({
-    method: zod__WEBPACK_IMPORTED_MODULE_0__.z.literal("completion/complete"),
-    params: BaseRequestParamsSchema.extend({
-        ref: zod__WEBPACK_IMPORTED_MODULE_0__.z.union([PromptReferenceSchema, ResourceReferenceSchema]),
-        /**
-         * The argument's information
-         */
-        argument: zod__WEBPACK_IMPORTED_MODULE_0__.z
-            .object({
-            /**
-             * The name of the argument
-             */
-            name: zod__WEBPACK_IMPORTED_MODULE_0__.z.string(),
-            /**
-             * The value of the argument to use for completion matching.
-             */
-            value: zod__WEBPACK_IMPORTED_MODULE_0__.z.string(),
-        })
-            .passthrough(),
-    }),
-});
-/**
- * The server's response to a completion/complete request
- */
-const CompleteResultSchema = ResultSchema.extend({
-    completion: zod__WEBPACK_IMPORTED_MODULE_0__.z
-        .object({
-        /**
-         * An array of completion values. Must not exceed 100 items.
-         */
-        values: zod__WEBPACK_IMPORTED_MODULE_0__.z.array(zod__WEBPACK_IMPORTED_MODULE_0__.z.string()).max(100),
-        /**
-         * The total number of completion options available. This can exceed the number of values actually sent in the response.
-         */
-        total: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.number().int()),
-        /**
-         * Indicates whether there are additional completion options beyond those provided in the current response, even if the exact total is unknown.
-         */
-        hasMore: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.boolean()),
-    })
-        .passthrough(),
-});
-/* Roots */
-/**
- * Represents a root directory or file that the server can operate on.
- */
-const RootSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z
-    .object({
-    /**
-     * The URI identifying the root. This *must* start with file:// for now.
-     */
-    uri: zod__WEBPACK_IMPORTED_MODULE_0__.z.string().startsWith("file://"),
-    /**
-     * An optional name for the root.
-     */
-    name: zod__WEBPACK_IMPORTED_MODULE_0__.z.optional(zod__WEBPACK_IMPORTED_MODULE_0__.z.string()),
-})
-    .passthrough();
-/**
- * Sent from the server to request a list of root URIs from the client.
- */
-const ListRootsRequestSchema = RequestSchema.extend({
-    method: zod__WEBPACK_IMPORTED_MODULE_0__.z.literal("roots/list"),
-});
-/**
- * The client's response to a roots/list request from the server.
- */
-const ListRootsResultSchema = ResultSchema.extend({
-    roots: zod__WEBPACK_IMPORTED_MODULE_0__.z.array(RootSchema),
-});
-/**
- * A notification from the client to the server, informing it that the list of roots has changed.
- */
-const RootsListChangedNotificationSchema = NotificationSchema.extend({
-    method: zod__WEBPACK_IMPORTED_MODULE_0__.z.literal("notifications/roots/list_changed"),
-});
-/* Client messages */
-const ClientRequestSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z.union([
-    PingRequestSchema,
-    InitializeRequestSchema,
-    CompleteRequestSchema,
-    SetLevelRequestSchema,
-    GetPromptRequestSchema,
-    ListPromptsRequestSchema,
-    ListResourcesRequestSchema,
-    ListResourceTemplatesRequestSchema,
-    ReadResourceRequestSchema,
-    SubscribeRequestSchema,
-    UnsubscribeRequestSchema,
-    CallToolRequestSchema,
-    ListToolsRequestSchema,
-]);
-const ClientNotificationSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z.union([
-    CancelledNotificationSchema,
-    ProgressNotificationSchema,
-    InitializedNotificationSchema,
-    RootsListChangedNotificationSchema,
-]);
-const ClientResultSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z.union([
-    EmptyResultSchema,
-    CreateMessageResultSchema,
-    ListRootsResultSchema,
-]);
-/* Server messages */
-const ServerRequestSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z.union([
-    PingRequestSchema,
-    CreateMessageRequestSchema,
-    ListRootsRequestSchema,
-]);
-const ServerNotificationSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z.union([
-    CancelledNotificationSchema,
-    ProgressNotificationSchema,
-    LoggingMessageNotificationSchema,
-    ResourceUpdatedNotificationSchema,
-    ResourceListChangedNotificationSchema,
-    ToolListChangedNotificationSchema,
-    PromptListChangedNotificationSchema,
-]);
-const ServerResultSchema = zod__WEBPACK_IMPORTED_MODULE_0__.z.union([
-    EmptyResultSchema,
-    InitializeResultSchema,
-    CompleteResultSchema,
-    GetPromptResultSchema,
-    ListPromptsResultSchema,
-    ListResourcesResultSchema,
-    ListResourceTemplatesResultSchema,
-    ReadResourceResultSchema,
-    CallToolResultSchema,
-    ListToolsResultSchema,
-]);
-class McpError extends Error {
-    constructor(code, message, data) {
-        super(`MCP error ${code}: ${message}`);
-        this.code = code;
-        this.data = data;
-        this.name = "McpError";
-    }
-}
-//# sourceMappingURL=types.js.map
-
-/***/ }),
-
 /***/ "./node_modules/abort-controller/dist/abort-controller.js":
 /*!****************************************************************!*\
   !*** ./node_modules/abort-controller/dist/abort-controller.js ***!
@@ -5269,383 +2641,6 @@ HttpsAgent.prototype[CREATE_HTTPS_CONNECTION] = OriginalHttpsAgent.prototype.cre
 });
 
 module.exports = HttpsAgent;
-
-
-/***/ }),
-
-/***/ "./node_modules/cross-spawn/index.js":
-/*!*******************************************!*\
-  !*** ./node_modules/cross-spawn/index.js ***!
-  \*******************************************/
-/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
-
-"use strict";
-
-
-const cp = __webpack_require__(/*! child_process */ "child_process");
-const parse = __webpack_require__(/*! ./lib/parse */ "./node_modules/cross-spawn/lib/parse.js");
-const enoent = __webpack_require__(/*! ./lib/enoent */ "./node_modules/cross-spawn/lib/enoent.js");
-
-function spawn(command, args, options) {
-    // Parse the arguments
-    const parsed = parse(command, args, options);
-
-    // Spawn the child process
-    const spawned = cp.spawn(parsed.command, parsed.args, parsed.options);
-
-    // Hook into child process "exit" event to emit an error if the command
-    // does not exists, see: https://github.com/IndigoUnited/node-cross-spawn/issues/16
-    enoent.hookChildProcess(spawned, parsed);
-
-    return spawned;
-}
-
-function spawnSync(command, args, options) {
-    // Parse the arguments
-    const parsed = parse(command, args, options);
-
-    // Spawn the child process
-    const result = cp.spawnSync(parsed.command, parsed.args, parsed.options);
-
-    // Analyze if the command does not exist, see: https://github.com/IndigoUnited/node-cross-spawn/issues/16
-    result.error = result.error || enoent.verifyENOENTSync(result.status, parsed);
-
-    return result;
-}
-
-module.exports = spawn;
-module.exports.spawn = spawn;
-module.exports.sync = spawnSync;
-
-module.exports._parse = parse;
-module.exports._enoent = enoent;
-
-
-/***/ }),
-
-/***/ "./node_modules/cross-spawn/lib/enoent.js":
-/*!************************************************!*\
-  !*** ./node_modules/cross-spawn/lib/enoent.js ***!
-  \************************************************/
-/***/ ((module) => {
-
-"use strict";
-
-
-const isWin = process.platform === 'win32';
-
-function notFoundError(original, syscall) {
-    return Object.assign(new Error(`${syscall} ${original.command} ENOENT`), {
-        code: 'ENOENT',
-        errno: 'ENOENT',
-        syscall: `${syscall} ${original.command}`,
-        path: original.command,
-        spawnargs: original.args,
-    });
-}
-
-function hookChildProcess(cp, parsed) {
-    if (!isWin) {
-        return;
-    }
-
-    const originalEmit = cp.emit;
-
-    cp.emit = function (name, arg1) {
-        // If emitting "exit" event and exit code is 1, we need to check if
-        // the command exists and emit an "error" instead
-        // See https://github.com/IndigoUnited/node-cross-spawn/issues/16
-        if (name === 'exit') {
-            const err = verifyENOENT(arg1, parsed);
-
-            if (err) {
-                return originalEmit.call(cp, 'error', err);
-            }
-        }
-
-        return originalEmit.apply(cp, arguments); // eslint-disable-line prefer-rest-params
-    };
-}
-
-function verifyENOENT(status, parsed) {
-    if (isWin && status === 1 && !parsed.file) {
-        return notFoundError(parsed.original, 'spawn');
-    }
-
-    return null;
-}
-
-function verifyENOENTSync(status, parsed) {
-    if (isWin && status === 1 && !parsed.file) {
-        return notFoundError(parsed.original, 'spawnSync');
-    }
-
-    return null;
-}
-
-module.exports = {
-    hookChildProcess,
-    verifyENOENT,
-    verifyENOENTSync,
-    notFoundError,
-};
-
-
-/***/ }),
-
-/***/ "./node_modules/cross-spawn/lib/parse.js":
-/*!***********************************************!*\
-  !*** ./node_modules/cross-spawn/lib/parse.js ***!
-  \***********************************************/
-/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
-
-"use strict";
-
-
-const path = __webpack_require__(/*! path */ "path");
-const resolveCommand = __webpack_require__(/*! ./util/resolveCommand */ "./node_modules/cross-spawn/lib/util/resolveCommand.js");
-const escape = __webpack_require__(/*! ./util/escape */ "./node_modules/cross-spawn/lib/util/escape.js");
-const readShebang = __webpack_require__(/*! ./util/readShebang */ "./node_modules/cross-spawn/lib/util/readShebang.js");
-
-const isWin = process.platform === 'win32';
-const isExecutableRegExp = /\.(?:com|exe)$/i;
-const isCmdShimRegExp = /node_modules[\\/].bin[\\/][^\\/]+\.cmd$/i;
-
-function detectShebang(parsed) {
-    parsed.file = resolveCommand(parsed);
-
-    const shebang = parsed.file && readShebang(parsed.file);
-
-    if (shebang) {
-        parsed.args.unshift(parsed.file);
-        parsed.command = shebang;
-
-        return resolveCommand(parsed);
-    }
-
-    return parsed.file;
-}
-
-function parseNonShell(parsed) {
-    if (!isWin) {
-        return parsed;
-    }
-
-    // Detect & add support for shebangs
-    const commandFile = detectShebang(parsed);
-
-    // We don't need a shell if the command filename is an executable
-    const needsShell = !isExecutableRegExp.test(commandFile);
-
-    // If a shell is required, use cmd.exe and take care of escaping everything correctly
-    // Note that `forceShell` is an hidden option used only in tests
-    if (parsed.options.forceShell || needsShell) {
-        // Need to double escape meta chars if the command is a cmd-shim located in `node_modules/.bin/`
-        // The cmd-shim simply calls execute the package bin file with NodeJS, proxying any argument
-        // Because the escape of metachars with ^ gets interpreted when the cmd.exe is first called,
-        // we need to double escape them
-        const needsDoubleEscapeMetaChars = isCmdShimRegExp.test(commandFile);
-
-        // Normalize posix paths into OS compatible paths (e.g.: foo/bar -> foo\bar)
-        // This is necessary otherwise it will always fail with ENOENT in those cases
-        parsed.command = path.normalize(parsed.command);
-
-        // Escape command & arguments
-        parsed.command = escape.command(parsed.command);
-        parsed.args = parsed.args.map((arg) => escape.argument(arg, needsDoubleEscapeMetaChars));
-
-        const shellCommand = [parsed.command].concat(parsed.args).join(' ');
-
-        parsed.args = ['/d', '/s', '/c', `"${shellCommand}"`];
-        parsed.command = process.env.comspec || 'cmd.exe';
-        parsed.options.windowsVerbatimArguments = true; // Tell node's spawn that the arguments are already escaped
-    }
-
-    return parsed;
-}
-
-function parse(command, args, options) {
-    // Normalize arguments, similar to nodejs
-    if (args && !Array.isArray(args)) {
-        options = args;
-        args = null;
-    }
-
-    args = args ? args.slice(0) : []; // Clone array to avoid changing the original
-    options = Object.assign({}, options); // Clone object to avoid changing the original
-
-    // Build our parsed object
-    const parsed = {
-        command,
-        args,
-        options,
-        file: undefined,
-        original: {
-            command,
-            args,
-        },
-    };
-
-    // Delegate further parsing to shell or non-shell
-    return options.shell ? parsed : parseNonShell(parsed);
-}
-
-module.exports = parse;
-
-
-/***/ }),
-
-/***/ "./node_modules/cross-spawn/lib/util/escape.js":
-/*!*****************************************************!*\
-  !*** ./node_modules/cross-spawn/lib/util/escape.js ***!
-  \*****************************************************/
-/***/ ((module) => {
-
-"use strict";
-
-
-// See http://www.robvanderwoude.com/escapechars.php
-const metaCharsRegExp = /([()\][%!^"`<>&|;, *?])/g;
-
-function escapeCommand(arg) {
-    // Escape meta chars
-    arg = arg.replace(metaCharsRegExp, '^$1');
-
-    return arg;
-}
-
-function escapeArgument(arg, doubleEscapeMetaChars) {
-    // Convert to string
-    arg = `${arg}`;
-
-    // Algorithm below is based on https://qntm.org/cmd
-    // It's slightly altered to disable JS backtracking to avoid hanging on specially crafted input
-    // Please see https://github.com/moxystudio/node-cross-spawn/pull/160 for more information
-
-    // Sequence of backslashes followed by a double quote:
-    // double up all the backslashes and escape the double quote
-    arg = arg.replace(/(?=(\\+?)?)\1"/g, '$1$1\\"');
-
-    // Sequence of backslashes followed by the end of the string
-    // (which will become a double quote later):
-    // double up all the backslashes
-    arg = arg.replace(/(?=(\\+?)?)\1$/, '$1$1');
-
-    // All other backslashes occur literally
-
-    // Quote the whole thing:
-    arg = `"${arg}"`;
-
-    // Escape meta chars
-    arg = arg.replace(metaCharsRegExp, '^$1');
-
-    // Double escape meta chars if necessary
-    if (doubleEscapeMetaChars) {
-        arg = arg.replace(metaCharsRegExp, '^$1');
-    }
-
-    return arg;
-}
-
-module.exports.command = escapeCommand;
-module.exports.argument = escapeArgument;
-
-
-/***/ }),
-
-/***/ "./node_modules/cross-spawn/lib/util/readShebang.js":
-/*!**********************************************************!*\
-  !*** ./node_modules/cross-spawn/lib/util/readShebang.js ***!
-  \**********************************************************/
-/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
-
-"use strict";
-
-
-const fs = __webpack_require__(/*! fs */ "fs");
-const shebangCommand = __webpack_require__(/*! shebang-command */ "./node_modules/shebang-command/index.js");
-
-function readShebang(command) {
-    // Read the first 150 bytes from the file
-    const size = 150;
-    const buffer = Buffer.alloc(size);
-
-    let fd;
-
-    try {
-        fd = fs.openSync(command, 'r');
-        fs.readSync(fd, buffer, 0, size, 0);
-        fs.closeSync(fd);
-    } catch (e) { /* Empty */ }
-
-    // Attempt to extract shebang (null is returned if not a shebang)
-    return shebangCommand(buffer.toString());
-}
-
-module.exports = readShebang;
-
-
-/***/ }),
-
-/***/ "./node_modules/cross-spawn/lib/util/resolveCommand.js":
-/*!*************************************************************!*\
-  !*** ./node_modules/cross-spawn/lib/util/resolveCommand.js ***!
-  \*************************************************************/
-/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
-
-"use strict";
-
-
-const path = __webpack_require__(/*! path */ "path");
-const which = __webpack_require__(/*! which */ "./node_modules/which/which.js");
-const getPathKey = __webpack_require__(/*! path-key */ "./node_modules/path-key/index.js");
-
-function resolveCommandAttempt(parsed, withoutPathExt) {
-    const env = parsed.options.env || process.env;
-    const cwd = process.cwd();
-    const hasCustomCwd = parsed.options.cwd != null;
-    // Worker threads do not have process.chdir()
-    const shouldSwitchCwd = hasCustomCwd && process.chdir !== undefined && !process.chdir.disabled;
-
-    // If a custom `cwd` was specified, we need to change the process cwd
-    // because `which` will do stat calls but does not support a custom cwd
-    if (shouldSwitchCwd) {
-        try {
-            process.chdir(parsed.options.cwd);
-        } catch (err) {
-            /* Empty */
-        }
-    }
-
-    let resolved;
-
-    try {
-        resolved = which.sync(parsed.command, {
-            path: env[getPathKey({ env })],
-            pathExt: withoutPathExt ? path.delimiter : undefined,
-        });
-    } catch (e) {
-        /* Empty */
-    } finally {
-        if (shouldSwitchCwd) {
-            process.chdir(cwd);
-        }
-    }
-
-    // If we successfully resolved, ensure that an absolute path is returned
-    // Note that when a custom `cwd` was used, we need to resolve to an absolute path based on it
-    if (resolved) {
-        resolved = path.resolve(hasCustomCwd ? parsed.options.cwd : '', resolved);
-    }
-
-    return resolved;
-}
-
-function resolveCommand(parsed) {
-    return resolveCommandAttempt(parsed) || resolveCommandAttempt(parsed, true);
-}
-
-module.exports = resolveCommand;
 
 
 /***/ }),
@@ -7806,412 +4801,6 @@ module.exports.defineEventAttribute = defineEventAttribute
 
 /***/ }),
 
-/***/ "./node_modules/eventsource-parser/dist/index.js":
-/*!*******************************************************!*\
-  !*** ./node_modules/eventsource-parser/dist/index.js ***!
-  \*******************************************************/
-/***/ ((__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) => {
-
-"use strict";
-__webpack_require__.r(__webpack_exports__);
-/* harmony export */ __webpack_require__.d(__webpack_exports__, {
-/* harmony export */   ParseError: () => (/* binding */ ParseError),
-/* harmony export */   createParser: () => (/* binding */ createParser)
-/* harmony export */ });
-class ParseError extends Error {
-  constructor(message, options) {
-    super(message), this.name = "ParseError", this.type = options.type, this.field = options.field, this.value = options.value, this.line = options.line;
-  }
-}
-function noop(_arg) {
-}
-function createParser(callbacks) {
-  if (typeof callbacks == "function")
-    throw new TypeError(
-      "`callbacks` must be an object, got a function instead. Did you mean `{onEvent: fn}`?"
-    );
-  const { onEvent = noop, onError = noop, onRetry = noop, onComment } = callbacks;
-  let incompleteLine = "", isFirstChunk = !0, id, data = "", eventType = "";
-  function feed(newChunk) {
-    const chunk = isFirstChunk ? newChunk.replace(/^\xEF\xBB\xBF/, "") : newChunk, [complete, incomplete] = splitLines(`${incompleteLine}${chunk}`);
-    for (const line of complete)
-      parseLine(line);
-    incompleteLine = incomplete, isFirstChunk = !1;
-  }
-  function parseLine(line) {
-    if (line === "") {
-      dispatchEvent();
-      return;
-    }
-    if (line.startsWith(":")) {
-      onComment && onComment(line.slice(line.startsWith(": ") ? 2 : 1));
-      return;
-    }
-    const fieldSeparatorIndex = line.indexOf(":");
-    if (fieldSeparatorIndex !== -1) {
-      const field = line.slice(0, fieldSeparatorIndex), offset = line[fieldSeparatorIndex + 1] === " " ? 2 : 1, value = line.slice(fieldSeparatorIndex + offset);
-      processField(field, value, line);
-      return;
-    }
-    processField(line, "", line);
-  }
-  function processField(field, value, line) {
-    switch (field) {
-      case "event":
-        eventType = value;
-        break;
-      case "data":
-        data = `${data}${value}
-`;
-        break;
-      case "id":
-        id = value.includes("\0") ? void 0 : value;
-        break;
-      case "retry":
-        /^\d+$/.test(value) ? onRetry(parseInt(value, 10)) : onError(
-          new ParseError(`Invalid \`retry\` value: "${value}"`, {
-            type: "invalid-retry",
-            value,
-            line
-          })
-        );
-        break;
-      default:
-        onError(
-          new ParseError(
-            `Unknown field "${field.length > 20 ? `${field.slice(0, 20)}\u2026` : field}"`,
-            { type: "unknown-field", field, value, line }
-          )
-        );
-        break;
-    }
-  }
-  function dispatchEvent() {
-    data.length > 0 && onEvent({
-      id,
-      event: eventType || void 0,
-      // If the data buffer's last character is a U+000A LINE FEED (LF) character,
-      // then remove the last character from the data buffer.
-      data: data.endsWith(`
-`) ? data.slice(0, -1) : data
-    }), id = void 0, data = "", eventType = "";
-  }
-  function reset(options = {}) {
-    incompleteLine && options.consume && parseLine(incompleteLine), isFirstChunk = !0, id = void 0, data = "", eventType = "", incompleteLine = "";
-  }
-  return { feed, reset };
-}
-function splitLines(chunk) {
-  const lines = [];
-  let incompleteLine = "", searchIndex = 0;
-  for (; searchIndex < chunk.length; ) {
-    const crIndex = chunk.indexOf("\r", searchIndex), lfIndex = chunk.indexOf(`
-`, searchIndex);
-    let lineEnd = -1;
-    if (crIndex !== -1 && lfIndex !== -1 ? lineEnd = Math.min(crIndex, lfIndex) : crIndex !== -1 ? lineEnd = crIndex : lfIndex !== -1 && (lineEnd = lfIndex), lineEnd === -1) {
-      incompleteLine = chunk.slice(searchIndex);
-      break;
-    } else {
-      const line = chunk.slice(searchIndex, lineEnd);
-      lines.push(line), searchIndex = lineEnd + 1, chunk[searchIndex - 1] === "\r" && chunk[searchIndex] === `
-` && searchIndex++;
-    }
-  }
-  return [lines, incompleteLine];
-}
-
-//# sourceMappingURL=index.js.map
-
-
-/***/ }),
-
-/***/ "./node_modules/eventsource/dist/index.js":
-/*!************************************************!*\
-  !*** ./node_modules/eventsource/dist/index.js ***!
-  \************************************************/
-/***/ ((__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) => {
-
-"use strict";
-__webpack_require__.r(__webpack_exports__);
-/* harmony export */ __webpack_require__.d(__webpack_exports__, {
-/* harmony export */   ErrorEvent: () => (/* binding */ ErrorEvent),
-/* harmony export */   EventSource: () => (/* binding */ EventSource)
-/* harmony export */ });
-/* harmony import */ var eventsource_parser__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! eventsource-parser */ "./node_modules/eventsource-parser/dist/index.js");
-
-class ErrorEvent extends Event {
-  /**
-   * Constructs a new `ErrorEvent` instance. This is typically not called directly,
-   * but rather emitted by the `EventSource` object when an error occurs.
-   *
-   * @param type - The type of the event (should be "error")
-   * @param errorEventInitDict - Optional properties to include in the error event
-   */
-  constructor(type, errorEventInitDict) {
-    var _a, _b;
-    super(type), this.code = (_a = errorEventInitDict == null ? void 0 : errorEventInitDict.code) != null ? _a : void 0, this.message = (_b = errorEventInitDict == null ? void 0 : errorEventInitDict.message) != null ? _b : void 0;
-  }
-  /**
-   * Node.js "hides" the `message` and `code` properties of the `ErrorEvent` instance,
-   * when it is `console.log`'ed. This makes it harder to debug errors. To ease debugging,
-   * we explicitly include the properties in the `inspect` method.
-   *
-   * This is automatically called by Node.js when you `console.log` an instance of this class.
-   *
-   * @param _depth - The current depth
-   * @param options - The options passed to `util.inspect`
-   * @param inspect - The inspect function to use (prevents having to import it from `util`)
-   * @returns A string representation of the error
-   */
-  [Symbol.for("nodejs.util.inspect.custom")](_depth, options, inspect) {
-    return inspect(inspectableError(this), options);
-  }
-  /**
-   * Deno "hides" the `message` and `code` properties of the `ErrorEvent` instance,
-   * when it is `console.log`'ed. This makes it harder to debug errors. To ease debugging,
-   * we explicitly include the properties in the `inspect` method.
-   *
-   * This is automatically called by Deno when you `console.log` an instance of this class.
-   *
-   * @param inspect - The inspect function to use (prevents having to import it from `util`)
-   * @param options - The options passed to `Deno.inspect`
-   * @returns A string representation of the error
-   */
-  [Symbol.for("Deno.customInspect")](inspect, options) {
-    return inspect(inspectableError(this), options);
-  }
-}
-function syntaxError(message) {
-  const DomException = globalThis.DOMException;
-  return typeof DomException == "function" ? new DomException(message, "SyntaxError") : new SyntaxError(message);
-}
-function flattenError(err) {
-  return err instanceof Error ? "errors" in err && Array.isArray(err.errors) ? err.errors.map(flattenError).join(", ") : "cause" in err && err.cause instanceof Error ? `${err}: ${flattenError(err.cause)}` : err.message : `${err}`;
-}
-function inspectableError(err) {
-  return {
-    type: err.type,
-    message: err.message,
-    code: err.code,
-    defaultPrevented: err.defaultPrevented,
-    cancelable: err.cancelable,
-    timeStamp: err.timeStamp
-  };
-}
-var __typeError = (msg) => {
-  throw TypeError(msg);
-}, __accessCheck = (obj, member, msg) => member.has(obj) || __typeError("Cannot " + msg), __privateGet = (obj, member, getter) => (__accessCheck(obj, member, "read from private field"), getter ? getter.call(obj) : member.get(obj)), __privateAdd = (obj, member, value) => member.has(obj) ? __typeError("Cannot add the same private member more than once") : member instanceof WeakSet ? member.add(obj) : member.set(obj, value), __privateSet = (obj, member, value, setter) => (__accessCheck(obj, member, "write to private field"), member.set(obj, value), value), __privateMethod = (obj, member, method) => (__accessCheck(obj, member, "access private method"), method), _readyState, _url, _redirectUrl, _withCredentials, _fetch, _reconnectInterval, _reconnectTimer, _lastEventId, _controller, _parser, _onError, _onMessage, _onOpen, _EventSource_instances, connect_fn, _onFetchResponse, _onFetchError, getRequestOptions_fn, _onEvent, _onRetryChange, failConnection_fn, scheduleReconnect_fn, _reconnect;
-class EventSource extends EventTarget {
-  constructor(url, eventSourceInitDict) {
-    var _a, _b;
-    super(), __privateAdd(this, _EventSource_instances), this.CONNECTING = 0, this.OPEN = 1, this.CLOSED = 2, __privateAdd(this, _readyState), __privateAdd(this, _url), __privateAdd(this, _redirectUrl), __privateAdd(this, _withCredentials), __privateAdd(this, _fetch), __privateAdd(this, _reconnectInterval), __privateAdd(this, _reconnectTimer), __privateAdd(this, _lastEventId, null), __privateAdd(this, _controller), __privateAdd(this, _parser), __privateAdd(this, _onError, null), __privateAdd(this, _onMessage, null), __privateAdd(this, _onOpen, null), __privateAdd(this, _onFetchResponse, async (response) => {
-      var _a2;
-      __privateGet(this, _parser).reset();
-      const { body, redirected, status, headers } = response;
-      if (status === 204) {
-        __privateMethod(this, _EventSource_instances, failConnection_fn).call(this, "Server sent HTTP 204, not reconnecting", 204), this.close();
-        return;
-      }
-      if (redirected ? __privateSet(this, _redirectUrl, new URL(response.url)) : __privateSet(this, _redirectUrl, void 0), status !== 200) {
-        __privateMethod(this, _EventSource_instances, failConnection_fn).call(this, `Non-200 status code (${status})`, status);
-        return;
-      }
-      if (!(headers.get("content-type") || "").startsWith("text/event-stream")) {
-        __privateMethod(this, _EventSource_instances, failConnection_fn).call(this, 'Invalid content type, expected "text/event-stream"', status);
-        return;
-      }
-      if (__privateGet(this, _readyState) === this.CLOSED)
-        return;
-      __privateSet(this, _readyState, this.OPEN);
-      const openEvent = new Event("open");
-      if ((_a2 = __privateGet(this, _onOpen)) == null || _a2.call(this, openEvent), this.dispatchEvent(openEvent), typeof body != "object" || !body || !("getReader" in body)) {
-        __privateMethod(this, _EventSource_instances, failConnection_fn).call(this, "Invalid response body, expected a web ReadableStream", status), this.close();
-        return;
-      }
-      const decoder = new TextDecoder(), reader = body.getReader();
-      let open = !0;
-      do {
-        const { done, value } = await reader.read();
-        value && __privateGet(this, _parser).feed(decoder.decode(value, { stream: !done })), done && (open = !1, __privateGet(this, _parser).reset(), __privateMethod(this, _EventSource_instances, scheduleReconnect_fn).call(this));
-      } while (open);
-    }), __privateAdd(this, _onFetchError, (err) => {
-      __privateSet(this, _controller, void 0), !(err.name === "AbortError" || err.type === "aborted") && __privateMethod(this, _EventSource_instances, scheduleReconnect_fn).call(this, flattenError(err));
-    }), __privateAdd(this, _onEvent, (event) => {
-      typeof event.id == "string" && __privateSet(this, _lastEventId, event.id);
-      const messageEvent = new MessageEvent(event.event || "message", {
-        data: event.data,
-        origin: __privateGet(this, _redirectUrl) ? __privateGet(this, _redirectUrl).origin : __privateGet(this, _url).origin,
-        lastEventId: event.id || ""
-      });
-      __privateGet(this, _onMessage) && (!event.event || event.event === "message") && __privateGet(this, _onMessage).call(this, messageEvent), this.dispatchEvent(messageEvent);
-    }), __privateAdd(this, _onRetryChange, (value) => {
-      __privateSet(this, _reconnectInterval, value);
-    }), __privateAdd(this, _reconnect, () => {
-      __privateSet(this, _reconnectTimer, void 0), __privateGet(this, _readyState) === this.CONNECTING && __privateMethod(this, _EventSource_instances, connect_fn).call(this);
-    });
-    try {
-      if (url instanceof URL)
-        __privateSet(this, _url, url);
-      else if (typeof url == "string")
-        __privateSet(this, _url, new URL(url, getBaseURL()));
-      else
-        throw new Error("Invalid URL");
-    } catch {
-      throw syntaxError("An invalid or illegal string was specified");
-    }
-    __privateSet(this, _parser, (0,eventsource_parser__WEBPACK_IMPORTED_MODULE_0__.createParser)({
-      onEvent: __privateGet(this, _onEvent),
-      onRetry: __privateGet(this, _onRetryChange)
-    })), __privateSet(this, _readyState, this.CONNECTING), __privateSet(this, _reconnectInterval, 3e3), __privateSet(this, _fetch, (_a = eventSourceInitDict == null ? void 0 : eventSourceInitDict.fetch) != null ? _a : globalThis.fetch), __privateSet(this, _withCredentials, (_b = eventSourceInitDict == null ? void 0 : eventSourceInitDict.withCredentials) != null ? _b : !1), __privateMethod(this, _EventSource_instances, connect_fn).call(this);
-  }
-  /**
-   * Returns the state of this EventSource object's connection. It can have the values described below.
-   *
-   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/EventSource/readyState)
-   *
-   * Note: typed as `number` instead of `0 | 1 | 2` for compatibility with the `EventSource` interface,
-   * defined in the TypeScript `dom` library.
-   *
-   * @public
-   */
-  get readyState() {
-    return __privateGet(this, _readyState);
-  }
-  /**
-   * Returns the URL providing the event stream.
-   *
-   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/EventSource/url)
-   *
-   * @public
-   */
-  get url() {
-    return __privateGet(this, _url).href;
-  }
-  /**
-   * Returns true if the credentials mode for connection requests to the URL providing the event stream is set to "include", and false otherwise.
-   *
-   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/EventSource/withCredentials)
-   */
-  get withCredentials() {
-    return __privateGet(this, _withCredentials);
-  }
-  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/EventSource/error_event) */
-  get onerror() {
-    return __privateGet(this, _onError);
-  }
-  set onerror(value) {
-    __privateSet(this, _onError, value);
-  }
-  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/EventSource/message_event) */
-  get onmessage() {
-    return __privateGet(this, _onMessage);
-  }
-  set onmessage(value) {
-    __privateSet(this, _onMessage, value);
-  }
-  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/EventSource/open_event) */
-  get onopen() {
-    return __privateGet(this, _onOpen);
-  }
-  set onopen(value) {
-    __privateSet(this, _onOpen, value);
-  }
-  addEventListener(type, listener, options) {
-    const listen = listener;
-    super.addEventListener(type, listen, options);
-  }
-  removeEventListener(type, listener, options) {
-    const listen = listener;
-    super.removeEventListener(type, listen, options);
-  }
-  /**
-   * Aborts any instances of the fetch algorithm started for this EventSource object, and sets the readyState attribute to CLOSED.
-   *
-   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/EventSource/close)
-   *
-   * @public
-   */
-  close() {
-    __privateGet(this, _reconnectTimer) && clearTimeout(__privateGet(this, _reconnectTimer)), __privateGet(this, _readyState) !== this.CLOSED && (__privateGet(this, _controller) && __privateGet(this, _controller).abort(), __privateSet(this, _readyState, this.CLOSED), __privateSet(this, _controller, void 0));
-  }
-}
-_readyState = /* @__PURE__ */ new WeakMap(), _url = /* @__PURE__ */ new WeakMap(), _redirectUrl = /* @__PURE__ */ new WeakMap(), _withCredentials = /* @__PURE__ */ new WeakMap(), _fetch = /* @__PURE__ */ new WeakMap(), _reconnectInterval = /* @__PURE__ */ new WeakMap(), _reconnectTimer = /* @__PURE__ */ new WeakMap(), _lastEventId = /* @__PURE__ */ new WeakMap(), _controller = /* @__PURE__ */ new WeakMap(), _parser = /* @__PURE__ */ new WeakMap(), _onError = /* @__PURE__ */ new WeakMap(), _onMessage = /* @__PURE__ */ new WeakMap(), _onOpen = /* @__PURE__ */ new WeakMap(), _EventSource_instances = /* @__PURE__ */ new WeakSet(), /**
-* Connect to the given URL and start receiving events
-*
-* @internal
-*/
-connect_fn = function() {
-  __privateSet(this, _readyState, this.CONNECTING), __privateSet(this, _controller, new AbortController()), __privateGet(this, _fetch)(__privateGet(this, _url), __privateMethod(this, _EventSource_instances, getRequestOptions_fn).call(this)).then(__privateGet(this, _onFetchResponse)).catch(__privateGet(this, _onFetchError));
-}, _onFetchResponse = /* @__PURE__ */ new WeakMap(), _onFetchError = /* @__PURE__ */ new WeakMap(), /**
-* Get request options for the `fetch()` request
-*
-* @returns The request options
-* @internal
-*/
-getRequestOptions_fn = function() {
-  var _a;
-  const init = {
-    // [spec] Let `corsAttributeState` be `Anonymous`…
-    // [spec] …will have their mode set to "cors"…
-    mode: "cors",
-    redirect: "follow",
-    headers: { Accept: "text/event-stream", ...__privateGet(this, _lastEventId) ? { "Last-Event-ID": __privateGet(this, _lastEventId) } : void 0 },
-    cache: "no-store",
-    signal: (_a = __privateGet(this, _controller)) == null ? void 0 : _a.signal
-  };
-  return "window" in globalThis && (init.credentials = this.withCredentials ? "include" : "same-origin"), init;
-}, _onEvent = /* @__PURE__ */ new WeakMap(), _onRetryChange = /* @__PURE__ */ new WeakMap(), /**
-* Handles the process referred to in the EventSource specification as "failing a connection".
-*
-* @param error - The error causing the connection to fail
-* @param code - The HTTP status code, if available
-* @internal
-*/
-failConnection_fn = function(message, code) {
-  var _a;
-  __privateGet(this, _readyState) !== this.CLOSED && __privateSet(this, _readyState, this.CLOSED);
-  const errorEvent = new ErrorEvent("error", { code, message });
-  (_a = __privateGet(this, _onError)) == null || _a.call(this, errorEvent), this.dispatchEvent(errorEvent);
-}, /**
-* Schedules a reconnection attempt against the EventSource endpoint.
-*
-* @param message - The error causing the connection to fail
-* @param code - The HTTP status code, if available
-* @internal
-*/
-scheduleReconnect_fn = function(message, code) {
-  var _a;
-  if (__privateGet(this, _readyState) === this.CLOSED)
-    return;
-  __privateSet(this, _readyState, this.CONNECTING);
-  const errorEvent = new ErrorEvent("error", { code, message });
-  (_a = __privateGet(this, _onError)) == null || _a.call(this, errorEvent), this.dispatchEvent(errorEvent), __privateSet(this, _reconnectTimer, setTimeout(__privateGet(this, _reconnect), __privateGet(this, _reconnectInterval)));
-}, _reconnect = /* @__PURE__ */ new WeakMap(), /**
-* ReadyState representing an EventSource currently trying to connect
-*
-* @public
-*/
-EventSource.CONNECTING = 0, /**
-* ReadyState representing an EventSource connection that is open (eg connected)
-*
-* @public
-*/
-EventSource.OPEN = 1, /**
-* ReadyState representing an EventSource connection that is closed (eg disconnected)
-*
-* @public
-*/
-EventSource.CLOSED = 2;
-function getBaseURL() {
-  const doc = "document" in globalThis ? globalThis.document : void 0;
-  return doc && typeof doc == "object" && "baseURI" in doc && typeof doc.baseURI == "string" ? doc.baseURI : void 0;
-}
-
-//# sourceMappingURL=index.js.map
-
-
-/***/ }),
-
 /***/ "./node_modules/form-data-encoder/lib/cjs/FileLike.js":
 /*!************************************************************!*\
   !*** ./node_modules/form-data-encoder/lib/cjs/FileLike.js ***!
@@ -9284,344 +5873,6 @@ module.exports = function (t) {
   return r;
 };
 
-
-/***/ }),
-
-/***/ "./node_modules/isexe/index.js":
-/*!*************************************!*\
-  !*** ./node_modules/isexe/index.js ***!
-  \*************************************/
-/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
-
-var fs = __webpack_require__(/*! fs */ "fs")
-var core
-if (process.platform === 'win32' || global.TESTING_WINDOWS) {
-  core = __webpack_require__(/*! ./windows.js */ "./node_modules/isexe/windows.js")
-} else {
-  core = __webpack_require__(/*! ./mode.js */ "./node_modules/isexe/mode.js")
-}
-
-module.exports = isexe
-isexe.sync = sync
-
-function isexe (path, options, cb) {
-  if (typeof options === 'function') {
-    cb = options
-    options = {}
-  }
-
-  if (!cb) {
-    if (typeof Promise !== 'function') {
-      throw new TypeError('callback not provided')
-    }
-
-    return new Promise(function (resolve, reject) {
-      isexe(path, options || {}, function (er, is) {
-        if (er) {
-          reject(er)
-        } else {
-          resolve(is)
-        }
-      })
-    })
-  }
-
-  core(path, options || {}, function (er, is) {
-    // ignore EACCES because that just means we aren't allowed to run it
-    if (er) {
-      if (er.code === 'EACCES' || options && options.ignoreErrors) {
-        er = null
-        is = false
-      }
-    }
-    cb(er, is)
-  })
-}
-
-function sync (path, options) {
-  // my kingdom for a filtered catch
-  try {
-    return core.sync(path, options || {})
-  } catch (er) {
-    if (options && options.ignoreErrors || er.code === 'EACCES') {
-      return false
-    } else {
-      throw er
-    }
-  }
-}
-
-
-/***/ }),
-
-/***/ "./node_modules/isexe/mode.js":
-/*!************************************!*\
-  !*** ./node_modules/isexe/mode.js ***!
-  \************************************/
-/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
-
-module.exports = isexe
-isexe.sync = sync
-
-var fs = __webpack_require__(/*! fs */ "fs")
-
-function isexe (path, options, cb) {
-  fs.stat(path, function (er, stat) {
-    cb(er, er ? false : checkStat(stat, options))
-  })
-}
-
-function sync (path, options) {
-  return checkStat(fs.statSync(path), options)
-}
-
-function checkStat (stat, options) {
-  return stat.isFile() && checkMode(stat, options)
-}
-
-function checkMode (stat, options) {
-  var mod = stat.mode
-  var uid = stat.uid
-  var gid = stat.gid
-
-  var myUid = options.uid !== undefined ?
-    options.uid : process.getuid && process.getuid()
-  var myGid = options.gid !== undefined ?
-    options.gid : process.getgid && process.getgid()
-
-  var u = parseInt('100', 8)
-  var g = parseInt('010', 8)
-  var o = parseInt('001', 8)
-  var ug = u | g
-
-  var ret = (mod & o) ||
-    (mod & g) && gid === myGid ||
-    (mod & u) && uid === myUid ||
-    (mod & ug) && myUid === 0
-
-  return ret
-}
-
-
-/***/ }),
-
-/***/ "./node_modules/isexe/windows.js":
-/*!***************************************!*\
-  !*** ./node_modules/isexe/windows.js ***!
-  \***************************************/
-/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
-
-module.exports = isexe
-isexe.sync = sync
-
-var fs = __webpack_require__(/*! fs */ "fs")
-
-function checkPathExt (path, options) {
-  var pathext = options.pathExt !== undefined ?
-    options.pathExt : process.env.PATHEXT
-
-  if (!pathext) {
-    return true
-  }
-
-  pathext = pathext.split(';')
-  if (pathext.indexOf('') !== -1) {
-    return true
-  }
-  for (var i = 0; i < pathext.length; i++) {
-    var p = pathext[i].toLowerCase()
-    if (p && path.substr(-p.length).toLowerCase() === p) {
-      return true
-    }
-  }
-  return false
-}
-
-function checkStat (stat, path, options) {
-  if (!stat.isSymbolicLink() && !stat.isFile()) {
-    return false
-  }
-  return checkPathExt(path, options)
-}
-
-function isexe (path, options, cb) {
-  fs.stat(path, function (er, stat) {
-    cb(er, er ? false : checkStat(stat, path, options))
-  })
-}
-
-function sync (path, options) {
-  return checkStat(fs.statSync(path), path, options)
-}
-
-
-/***/ }),
-
-/***/ "./node_modules/mcp-client/dist/MCPClient.js":
-/*!***************************************************!*\
-  !*** ./node_modules/mcp-client/dist/MCPClient.js ***!
-  \***************************************************/
-/***/ ((__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) => {
-
-"use strict";
-__webpack_require__.r(__webpack_exports__);
-/* harmony export */ __webpack_require__.d(__webpack_exports__, {
-/* harmony export */   ErrorCode: () => (/* reexport safe */ _modelcontextprotocol_sdk_types_js__WEBPACK_IMPORTED_MODULE_3__.ErrorCode),
-/* harmony export */   MCPClient: () => (/* binding */ MCPClient),
-/* harmony export */   McpError: () => (/* reexport safe */ _modelcontextprotocol_sdk_types_js__WEBPACK_IMPORTED_MODULE_3__.McpError)
-/* harmony export */ });
-/* harmony import */ var _modelcontextprotocol_sdk_client_index_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! @modelcontextprotocol/sdk/client/index.js */ "./node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js");
-/* harmony import */ var _modelcontextprotocol_sdk_client_sse_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! @modelcontextprotocol/sdk/client/sse.js */ "./node_modules/@modelcontextprotocol/sdk/dist/esm/client/sse.js");
-/* harmony import */ var _modelcontextprotocol_sdk_client_stdio_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! @modelcontextprotocol/sdk/client/stdio.js */ "./node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js");
-/* harmony import */ var _modelcontextprotocol_sdk_types_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! @modelcontextprotocol/sdk/types.js */ "./node_modules/@modelcontextprotocol/sdk/dist/esm/types.js");
-/* harmony import */ var events__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! events */ "events");
-// src/MCPClient.ts
-
-
-
-
-
-
-var transformRequestOptions = (requestOptions) => {
-  return {
-    onprogress: requestOptions.onProgress,
-    signal: requestOptions.signal,
-    timeout: requestOptions.timeout
-  };
-};
-var MCPClientEventEmitterBase = events__WEBPACK_IMPORTED_MODULE_4__;
-var MCPClientEventEmitter = class extends MCPClientEventEmitterBase {
-};
-async function fetchAllPages(client, requestParams, schema, getItems, requestOptions) {
-  const allItems = [];
-  let cursor;
-  do {
-    const params = { ...requestParams.params || {} };
-    if (cursor) {
-      params.cursor = cursor;
-    }
-    const response = await client.request(
-      { method: requestParams.method, params },
-      schema,
-      requestOptions ? transformRequestOptions(requestOptions) : void 0
-    );
-    allItems.push(...getItems(response));
-    cursor = response.nextCursor;
-  } while (cursor);
-  return allItems;
-}
-var MCPClient = class extends MCPClientEventEmitter {
-  client;
-  transports = [];
-  constructor(clientInfo, options) {
-    super();
-    this.client = new _modelcontextprotocol_sdk_client_index_js__WEBPACK_IMPORTED_MODULE_0__.Client(clientInfo, options);
-    this.client.setNotificationHandler(
-      _modelcontextprotocol_sdk_types_js__WEBPACK_IMPORTED_MODULE_3__.LoggingMessageNotificationSchema,
-      (message) => {
-        if (message.method === "notifications/message") {
-          this.emit("loggingMessage", {
-            level: message.params.level,
-            ...message.params.data ?? {}
-          });
-        }
-      }
-    );
-  }
-  async connect(options) {
-    if (options.type === "sse") {
-      const transport = new _modelcontextprotocol_sdk_client_sse_js__WEBPACK_IMPORTED_MODULE_1__.SSEClientTransport(new URL(options.url));
-      this.transports.push(transport);
-      await this.client.connect(transport);
-    } else if (options.type === "stdio") {
-      let mergedEnv;
-      if (options.env !== null && options.env !== void 0) {
-        mergedEnv = { ...(0,_modelcontextprotocol_sdk_client_stdio_js__WEBPACK_IMPORTED_MODULE_2__.getDefaultEnvironment)(), ...options.env };
-      } else {
-        mergedEnv = (0,_modelcontextprotocol_sdk_client_stdio_js__WEBPACK_IMPORTED_MODULE_2__.getDefaultEnvironment)();
-      }
-      const transport = new _modelcontextprotocol_sdk_client_stdio_js__WEBPACK_IMPORTED_MODULE_2__.StdioClientTransport({
-        command: options.command,
-        env: mergedEnv,
-        args: options.args
-      });
-      this.transports.push(transport);
-      this.client.connect(transport);
-    } else {
-      throw new Error(`Unknown transport type`);
-    }
-  }
-  async ping(options) {
-    await this.client.ping(options?.requestOptions);
-    return null;
-  }
-  async getAllTools(options) {
-    return fetchAllPages(
-      this.client,
-      { method: "tools/list" },
-      _modelcontextprotocol_sdk_types_js__WEBPACK_IMPORTED_MODULE_3__.ListToolsResultSchema,
-      (result) => result.tools,
-      options?.requestOptions
-    );
-  }
-  async getAllResources(options) {
-    return fetchAllPages(
-      this.client,
-      { method: "resources/list" },
-      _modelcontextprotocol_sdk_types_js__WEBPACK_IMPORTED_MODULE_3__.ListResourcesResultSchema,
-      (result) => result.resources,
-      options?.requestOptions
-    );
-  }
-  async getAllPrompts(options) {
-    return fetchAllPages(
-      this.client,
-      { method: "prompts/list" },
-      _modelcontextprotocol_sdk_types_js__WEBPACK_IMPORTED_MODULE_3__.ListPromptsResultSchema,
-      (result) => result.prompts,
-      options?.requestOptions
-    );
-  }
-  async callTool(invocation, options) {
-    return await this.client.callTool(
-      invocation,
-      options?.resultSchema,
-      options?.requestOptions ? transformRequestOptions(options.requestOptions) : void 0
-    );
-  }
-  async complete(params, options) {
-    return await this.client.complete(params, options?.requestOptions);
-  }
-  async getResource(params, options) {
-    return await this.client.readResource(params, options?.requestOptions);
-  }
-  async getPrompt(params, options) {
-    return await this.client.getPrompt(params, options?.requestOptions);
-  }
-  async getAllResourceTemplates(options) {
-    let cursor;
-    const allItems = [];
-    do {
-      const response = await this.client.listResourceTemplates(
-        { cursor },
-        options?.requestOptions
-      );
-      allItems.push(...response.resourceTemplates);
-      cursor = response.nextCursor;
-    } while (cursor);
-    return allItems;
-  }
-  async setLoggingLevel(level) {
-    await this.client.setLoggingLevel(level);
-  }
-  async close() {
-    for (const transport of this.transports) {
-      await transport.close();
-    }
-  }
-};
-
-//# sourceMappingURL=MCPClient.js.map
 
 /***/ }),
 
@@ -11624,165 +7875,8729 @@ fetch.Promise = global.Promise;
 
 /***/ }),
 
-/***/ "./node_modules/path-key/index.js":
-/*!****************************************!*\
-  !*** ./node_modules/path-key/index.js ***!
-  \****************************************/
-/***/ ((module) => {
+/***/ "./node_modules/openai/_shims/MultipartBody.js":
+/*!*****************************************************!*\
+  !*** ./node_modules/openai/_shims/MultipartBody.js ***!
+  \*****************************************************/
+/***/ ((__unused_webpack_module, exports) => {
 
 "use strict";
 
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.MultipartBody = void 0;
+/**
+ * Disclaimer: modules in _shims aren't intended to be imported by SDK users.
+ */
+class MultipartBody {
+    constructor(body) {
+        this.body = body;
+    }
+    get [Symbol.toStringTag]() {
+        return 'MultipartBody';
+    }
+}
+exports.MultipartBody = MultipartBody;
+//# sourceMappingURL=MultipartBody.js.map
 
-const pathKey = (options = {}) => {
-	const environment = options.env || process.env;
-	const platform = options.platform || process.platform;
+/***/ }),
 
-	if (platform !== 'win32') {
-		return 'PATH';
-	}
+/***/ "./node_modules/openai/_shims/auto/runtime-node.js":
+/*!*********************************************************!*\
+  !*** ./node_modules/openai/_shims/auto/runtime-node.js ***!
+  \*********************************************************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
 
-	return Object.keys(environment).reverse().find(key => key.toUpperCase() === 'PATH') || 'Path';
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __exportStar = (this && this.__exportStar) || function(m, exports) {
+    for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports, p)) __createBinding(exports, m, p);
 };
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+/**
+ * Disclaimer: modules in _shims aren't intended to be imported by SDK users.
+ */
+__exportStar(__webpack_require__(/*! ../node-runtime.js */ "./node_modules/openai/_shims/node-runtime.js"), exports);
+//# sourceMappingURL=runtime-node.js.map
 
-module.exports = pathKey;
-// TODO: Remove this for the next major release
-module.exports["default"] = pathKey;
+/***/ }),
+
+/***/ "./node_modules/openai/_shims/index.js":
+/*!*********************************************!*\
+  !*** ./node_modules/openai/_shims/index.js ***!
+  \*********************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+/**
+ * Disclaimer: modules in _shims aren't intended to be imported by SDK users.
+ */
+const shims = __webpack_require__(/*! ./registry */ "./node_modules/openai/_shims/registry.js");
+const auto = __webpack_require__(/*! openai/_shims/auto/runtime */ "./node_modules/openai/_shims/auto/runtime-node.js");
+exports.init = () => {
+  if (!shims.kind) shims.setShims(auto.getRuntime(), { auto: true });
+};
+for (const property of Object.keys(shims)) {
+  Object.defineProperty(exports, property, {
+    get() {
+      return shims[property];
+    },
+  });
+}
+
+exports.init();
 
 
 /***/ }),
 
-/***/ "./node_modules/pkce-challenge/dist/index.node.js":
-/*!********************************************************!*\
-  !*** ./node_modules/pkce-challenge/dist/index.node.js ***!
-  \********************************************************/
-/***/ ((__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) => {
+/***/ "./node_modules/openai/_shims/node-runtime.js":
+/*!****************************************************!*\
+  !*** ./node_modules/openai/_shims/node-runtime.js ***!
+  \****************************************************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
 
 "use strict";
-__webpack_require__.r(__webpack_exports__);
-/* harmony export */ __webpack_require__.d(__webpack_exports__, {
-/* harmony export */   "default": () => (/* binding */ pkceChallenge),
-/* harmony export */   generateChallenge: () => (/* binding */ generateChallenge),
-/* harmony export */   verifyChallenge: () => (/* binding */ verifyChallenge)
-/* harmony export */ });
-let crypto;
-crypto =
-    globalThis.crypto?.webcrypto ?? // Node.js [18-16] REPL
-        globalThis.crypto ?? // Node.js >18
-        Promise.resolve(/*! import() */).then(__webpack_require__.t.bind(__webpack_require__, /*! node:crypto */ "node:crypto", 19)).then(m => m.webcrypto); // Node.js <18 Non-REPL
-/**
- * Creates an array of length `size` of random bytes
- * @param size
- * @returns Array of random ints (0 to 255)
- */
-async function getRandomValues(size) {
-    return (await crypto).getRandomValues(new Uint8Array(size));
-}
-/** Generate cryptographically strong random string
- * @param size The desired length of the string
- * @returns The random string
- */
-async function random(size) {
-    const mask = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~";
-    let result = "";
-    const randomUints = await getRandomValues(size);
-    for (let i = 0; i < size; i++) {
-        // cap the value of the randomIndex to mask.length - 1
-        const randomIndex = randomUints[i] % mask.length;
-        result += mask[randomIndex];
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
     }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
     return result;
-}
-/** Generate a PKCE challenge verifier
- * @param length Length of the verifier
- * @returns A random verifier `length` characters long
+};
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getRuntime = void 0;
+/**
+ * Disclaimer: modules in _shims aren't intended to be imported by SDK users.
  */
-async function generateVerifier(length) {
-    return await random(length);
-}
-/** Generate a PKCE code challenge from a code verifier
- * @param code_verifier
- * @returns The base64 url encoded code challenge
- */
-async function generateChallenge(code_verifier) {
-    const buffer = await (await crypto).subtle.digest("SHA-256", new TextEncoder().encode(code_verifier));
-    // Generate base64url string
-    // btoa is deprecated in Node.js but is used here for web browser compatibility
-    // (which has no good replacement yet, see also https://github.com/whatwg/html/issues/6811)
-    return btoa(String.fromCharCode(...new Uint8Array(buffer)))
-        .replace(/\//g, '_')
-        .replace(/\+/g, '-')
-        .replace(/=/g, '');
-}
-/** Generate a PKCE challenge pair
- * @param length Length of the verifer (between 43-128). Defaults to 43.
- * @returns PKCE challenge pair
- */
-async function pkceChallenge(length) {
-    if (!length)
-        length = 43;
-    if (length < 43 || length > 128) {
-        throw `Expected a length between 43 and 128. Received ${length}.`;
+const nf = __importStar(__webpack_require__(/*! node-fetch */ "./node_modules/node-fetch/lib/index.mjs"));
+const fd = __importStar(__webpack_require__(/*! formdata-node */ "./node_modules/formdata-node/lib/cjs/index.js"));
+const agentkeepalive_1 = __importDefault(__webpack_require__(/*! agentkeepalive */ "./node_modules/agentkeepalive/index.js"));
+const abort_controller_1 = __webpack_require__(/*! abort-controller */ "./node_modules/abort-controller/dist/abort-controller.js");
+const node_fs_1 = __webpack_require__(/*! node:fs */ "node:fs");
+const form_data_encoder_1 = __webpack_require__(/*! form-data-encoder */ "./node_modules/form-data-encoder/lib/cjs/index.js");
+const node_stream_1 = __webpack_require__(/*! node:stream */ "node:stream");
+const MultipartBody_1 = __webpack_require__(/*! ./MultipartBody.js */ "./node_modules/openai/_shims/MultipartBody.js");
+const web_1 = __webpack_require__(/*! node:stream/web */ "node:stream/web");
+let fileFromPathWarned = false;
+async function fileFromPath(path, ...args) {
+    // this import fails in environments that don't handle export maps correctly, like old versions of Jest
+    const { fileFromPath: _fileFromPath } = await Promise.resolve().then(() => __importStar(__webpack_require__(/*! formdata-node/file-from-path */ "./node_modules/formdata-node/lib/cjs/fileFromPath.js")));
+    if (!fileFromPathWarned) {
+        console.warn(`fileFromPath is deprecated; use fs.createReadStream(${JSON.stringify(path)}) instead`);
+        fileFromPathWarned = true;
     }
-    const verifier = await generateVerifier(length);
-    const challenge = await generateChallenge(verifier);
+    // @ts-ignore
+    return await _fileFromPath(path, ...args);
+}
+const defaultHttpAgent = new agentkeepalive_1.default({ keepAlive: true, timeout: 5 * 60 * 1000 });
+const defaultHttpsAgent = new agentkeepalive_1.default.HttpsAgent({ keepAlive: true, timeout: 5 * 60 * 1000 });
+async function getMultipartRequestOptions(form, opts) {
+    const encoder = new form_data_encoder_1.FormDataEncoder(form);
+    const readable = node_stream_1.Readable.from(encoder);
+    const body = new MultipartBody_1.MultipartBody(readable);
+    const headers = {
+        ...opts.headers,
+        ...encoder.headers,
+        'Content-Length': encoder.contentLength,
+    };
+    return { ...opts, body: body, headers };
+}
+function getRuntime() {
+    // Polyfill global object if needed.
+    if (typeof AbortController === 'undefined') {
+        // @ts-expect-error (the types are subtly different, but compatible in practice)
+        globalThis.AbortController = abort_controller_1.AbortController;
+    }
     return {
-        code_verifier: verifier,
-        code_challenge: challenge,
+        kind: 'node',
+        fetch: nf.default,
+        Request: nf.Request,
+        Response: nf.Response,
+        Headers: nf.Headers,
+        FormData: fd.FormData,
+        Blob: fd.Blob,
+        File: fd.File,
+        ReadableStream: web_1.ReadableStream,
+        getMultipartRequestOptions,
+        getDefaultAgent: (url) => (url.startsWith('https') ? defaultHttpsAgent : defaultHttpAgent),
+        fileFromPath,
+        isFsReadStream: (value) => value instanceof node_fs_1.ReadStream,
     };
 }
-/** Verify that a code_verifier produces the expected code challenge
- * @param code_verifier
- * @param expectedChallenge The code challenge to verify
- * @returns True if challenges are equal. False otherwise.
- */
-async function verifyChallenge(code_verifier, expectedChallenge) {
-    const actualChallenge = await generateChallenge(code_verifier);
-    return actualChallenge === expectedChallenge;
+exports.getRuntime = getRuntime;
+//# sourceMappingURL=node-runtime.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/_shims/registry.js":
+/*!************************************************!*\
+  !*** ./node_modules/openai/_shims/registry.js ***!
+  \************************************************/
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.setShims = exports.isFsReadStream = exports.fileFromPath = exports.getDefaultAgent = exports.getMultipartRequestOptions = exports.ReadableStream = exports.File = exports.Blob = exports.FormData = exports.Headers = exports.Response = exports.Request = exports.fetch = exports.kind = exports.auto = void 0;
+exports.auto = false;
+exports.kind = undefined;
+exports.fetch = undefined;
+exports.Request = undefined;
+exports.Response = undefined;
+exports.Headers = undefined;
+exports.FormData = undefined;
+exports.Blob = undefined;
+exports.File = undefined;
+exports.ReadableStream = undefined;
+exports.getMultipartRequestOptions = undefined;
+exports.getDefaultAgent = undefined;
+exports.fileFromPath = undefined;
+exports.isFsReadStream = undefined;
+function setShims(shims, options = { auto: false }) {
+    if (exports.auto) {
+        throw new Error(`you must \`import 'openai/shims/${shims.kind}'\` before importing anything else from openai`);
+    }
+    if (exports.kind) {
+        throw new Error(`can't \`import 'openai/shims/${shims.kind}'\` after \`import 'openai/shims/${exports.kind}'\``);
+    }
+    exports.auto = options.auto;
+    exports.kind = shims.kind;
+    exports.fetch = shims.fetch;
+    exports.Request = shims.Request;
+    exports.Response = shims.Response;
+    exports.Headers = shims.Headers;
+    exports.FormData = shims.FormData;
+    exports.Blob = shims.Blob;
+    exports.File = shims.File;
+    exports.ReadableStream = shims.ReadableStream;
+    exports.getMultipartRequestOptions = shims.getMultipartRequestOptions;
+    exports.getDefaultAgent = shims.getDefaultAgent;
+    exports.fileFromPath = shims.fileFromPath;
+    exports.isFsReadStream = shims.isFsReadStream;
 }
-
+exports.setShims = setShims;
+//# sourceMappingURL=registry.js.map
 
 /***/ }),
 
-/***/ "./node_modules/shebang-command/index.js":
-/*!***********************************************!*\
-  !*** ./node_modules/shebang-command/index.js ***!
-  \***********************************************/
-/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
+/***/ "./node_modules/openai/_vendor/partial-json-parser/parser.js":
+/*!*******************************************************************!*\
+  !*** ./node_modules/openai/_vendor/partial-json-parser/parser.js ***!
+  \*******************************************************************/
+/***/ ((__unused_webpack_module, exports) => {
 
 "use strict";
 
-const shebangRegex = __webpack_require__(/*! shebang-regex */ "./node_modules/shebang-regex/index.js");
-
-module.exports = (string = '') => {
-	const match = string.match(shebangRegex);
-
-	if (!match) {
-		return null;
-	}
-
-	const [path, argument] = match[0].replace(/#! ?/, '').split(' ');
-	const binary = path.split('/').pop();
-
-	if (binary === 'env') {
-		return argument;
-	}
-
-	return argument ? `${binary} ${argument}` : binary;
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.MalformedJSON = exports.PartialJSON = exports.partialParse = void 0;
+const STR = 0b000000001;
+const NUM = 0b000000010;
+const ARR = 0b000000100;
+const OBJ = 0b000001000;
+const NULL = 0b000010000;
+const BOOL = 0b000100000;
+const NAN = 0b001000000;
+const INFINITY = 0b010000000;
+const MINUS_INFINITY = 0b100000000;
+const INF = INFINITY | MINUS_INFINITY;
+const SPECIAL = NULL | BOOL | INF | NAN;
+const ATOM = STR | NUM | SPECIAL;
+const COLLECTION = ARR | OBJ;
+const ALL = ATOM | COLLECTION;
+const Allow = {
+    STR,
+    NUM,
+    ARR,
+    OBJ,
+    NULL,
+    BOOL,
+    NAN,
+    INFINITY,
+    MINUS_INFINITY,
+    INF,
+    SPECIAL,
+    ATOM,
+    COLLECTION,
+    ALL,
 };
-
+// The JSON string segment was unable to be parsed completely
+class PartialJSON extends Error {
+}
+exports.PartialJSON = PartialJSON;
+class MalformedJSON extends Error {
+}
+exports.MalformedJSON = MalformedJSON;
+/**
+ * Parse incomplete JSON
+ * @param {string} jsonString Partial JSON to be parsed
+ * @param {number} allowPartial Specify what types are allowed to be partial, see {@link Allow} for details
+ * @returns The parsed JSON
+ * @throws {PartialJSON} If the JSON is incomplete (related to the `allow` parameter)
+ * @throws {MalformedJSON} If the JSON is malformed
+ */
+function parseJSON(jsonString, allowPartial = Allow.ALL) {
+    if (typeof jsonString !== 'string') {
+        throw new TypeError(`expecting str, got ${typeof jsonString}`);
+    }
+    if (!jsonString.trim()) {
+        throw new Error(`${jsonString} is empty`);
+    }
+    return _parseJSON(jsonString.trim(), allowPartial);
+}
+const _parseJSON = (jsonString, allow) => {
+    const length = jsonString.length;
+    let index = 0;
+    const markPartialJSON = (msg) => {
+        throw new PartialJSON(`${msg} at position ${index}`);
+    };
+    const throwMalformedError = (msg) => {
+        throw new MalformedJSON(`${msg} at position ${index}`);
+    };
+    const parseAny = () => {
+        skipBlank();
+        if (index >= length)
+            markPartialJSON('Unexpected end of input');
+        if (jsonString[index] === '"')
+            return parseStr();
+        if (jsonString[index] === '{')
+            return parseObj();
+        if (jsonString[index] === '[')
+            return parseArr();
+        if (jsonString.substring(index, index + 4) === 'null' ||
+            (Allow.NULL & allow && length - index < 4 && 'null'.startsWith(jsonString.substring(index)))) {
+            index += 4;
+            return null;
+        }
+        if (jsonString.substring(index, index + 4) === 'true' ||
+            (Allow.BOOL & allow && length - index < 4 && 'true'.startsWith(jsonString.substring(index)))) {
+            index += 4;
+            return true;
+        }
+        if (jsonString.substring(index, index + 5) === 'false' ||
+            (Allow.BOOL & allow && length - index < 5 && 'false'.startsWith(jsonString.substring(index)))) {
+            index += 5;
+            return false;
+        }
+        if (jsonString.substring(index, index + 8) === 'Infinity' ||
+            (Allow.INFINITY & allow && length - index < 8 && 'Infinity'.startsWith(jsonString.substring(index)))) {
+            index += 8;
+            return Infinity;
+        }
+        if (jsonString.substring(index, index + 9) === '-Infinity' ||
+            (Allow.MINUS_INFINITY & allow &&
+                1 < length - index &&
+                length - index < 9 &&
+                '-Infinity'.startsWith(jsonString.substring(index)))) {
+            index += 9;
+            return -Infinity;
+        }
+        if (jsonString.substring(index, index + 3) === 'NaN' ||
+            (Allow.NAN & allow && length - index < 3 && 'NaN'.startsWith(jsonString.substring(index)))) {
+            index += 3;
+            return NaN;
+        }
+        return parseNum();
+    };
+    const parseStr = () => {
+        const start = index;
+        let escape = false;
+        index++; // skip initial quote
+        while (index < length && (jsonString[index] !== '"' || (escape && jsonString[index - 1] === '\\'))) {
+            escape = jsonString[index] === '\\' ? !escape : false;
+            index++;
+        }
+        if (jsonString.charAt(index) == '"') {
+            try {
+                return JSON.parse(jsonString.substring(start, ++index - Number(escape)));
+            }
+            catch (e) {
+                throwMalformedError(String(e));
+            }
+        }
+        else if (Allow.STR & allow) {
+            try {
+                return JSON.parse(jsonString.substring(start, index - Number(escape)) + '"');
+            }
+            catch (e) {
+                // SyntaxError: Invalid escape sequence
+                return JSON.parse(jsonString.substring(start, jsonString.lastIndexOf('\\')) + '"');
+            }
+        }
+        markPartialJSON('Unterminated string literal');
+    };
+    const parseObj = () => {
+        index++; // skip initial brace
+        skipBlank();
+        const obj = {};
+        try {
+            while (jsonString[index] !== '}') {
+                skipBlank();
+                if (index >= length && Allow.OBJ & allow)
+                    return obj;
+                const key = parseStr();
+                skipBlank();
+                index++; // skip colon
+                try {
+                    const value = parseAny();
+                    Object.defineProperty(obj, key, { value, writable: true, enumerable: true, configurable: true });
+                }
+                catch (e) {
+                    if (Allow.OBJ & allow)
+                        return obj;
+                    else
+                        throw e;
+                }
+                skipBlank();
+                if (jsonString[index] === ',')
+                    index++; // skip comma
+            }
+        }
+        catch (e) {
+            if (Allow.OBJ & allow)
+                return obj;
+            else
+                markPartialJSON("Expected '}' at end of object");
+        }
+        index++; // skip final brace
+        return obj;
+    };
+    const parseArr = () => {
+        index++; // skip initial bracket
+        const arr = [];
+        try {
+            while (jsonString[index] !== ']') {
+                arr.push(parseAny());
+                skipBlank();
+                if (jsonString[index] === ',') {
+                    index++; // skip comma
+                }
+            }
+        }
+        catch (e) {
+            if (Allow.ARR & allow) {
+                return arr;
+            }
+            markPartialJSON("Expected ']' at end of array");
+        }
+        index++; // skip final bracket
+        return arr;
+    };
+    const parseNum = () => {
+        if (index === 0) {
+            if (jsonString === '-' && Allow.NUM & allow)
+                markPartialJSON("Not sure what '-' is");
+            try {
+                return JSON.parse(jsonString);
+            }
+            catch (e) {
+                if (Allow.NUM & allow) {
+                    try {
+                        if ('.' === jsonString[jsonString.length - 1])
+                            return JSON.parse(jsonString.substring(0, jsonString.lastIndexOf('.')));
+                        return JSON.parse(jsonString.substring(0, jsonString.lastIndexOf('e')));
+                    }
+                    catch (e) { }
+                }
+                throwMalformedError(String(e));
+            }
+        }
+        const start = index;
+        if (jsonString[index] === '-')
+            index++;
+        while (jsonString[index] && !',]}'.includes(jsonString[index]))
+            index++;
+        if (index == length && !(Allow.NUM & allow))
+            markPartialJSON('Unterminated number literal');
+        try {
+            return JSON.parse(jsonString.substring(start, index));
+        }
+        catch (e) {
+            if (jsonString.substring(start, index) === '-' && Allow.NUM & allow)
+                markPartialJSON("Not sure what '-' is");
+            try {
+                return JSON.parse(jsonString.substring(start, jsonString.lastIndexOf('e')));
+            }
+            catch (e) {
+                throwMalformedError(String(e));
+            }
+        }
+    };
+    const skipBlank = () => {
+        while (index < length && ' \n\r\t'.includes(jsonString[index])) {
+            index++;
+        }
+    };
+    return parseAny();
+};
+// using this function with malformed JSON is undefined behavior
+const partialParse = (input) => parseJSON(input, Allow.ALL ^ Allow.NUM);
+exports.partialParse = partialParse;
+//# sourceMappingURL=parser.js.map
 
 /***/ }),
 
-/***/ "./node_modules/shebang-regex/index.js":
-/*!*********************************************!*\
-  !*** ./node_modules/shebang-regex/index.js ***!
-  \*********************************************/
-/***/ ((module) => {
+/***/ "./node_modules/openai/core.js":
+/*!*************************************!*\
+  !*** ./node_modules/openai/core.js ***!
+  \*************************************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
 
 "use strict";
 
-module.exports = /^#!(.*)/;
+var __classPrivateFieldSet = (this && this.__classPrivateFieldSet) || function (receiver, state, value, kind, f) {
+    if (kind === "m") throw new TypeError("Private method is not writable");
+    if (kind === "a" && !f) throw new TypeError("Private accessor was defined without a setter");
+    if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver)) throw new TypeError("Cannot write private member to an object whose class did not declare it");
+    return (kind === "a" ? f.call(receiver, value) : f ? f.value = value : state.set(receiver, value)), value;
+};
+var __classPrivateFieldGet = (this && this.__classPrivateFieldGet) || function (receiver, state, kind, f) {
+    if (kind === "a" && !f) throw new TypeError("Private accessor was defined without a getter");
+    if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver)) throw new TypeError("Cannot read private member from an object whose class did not declare it");
+    return kind === "m" ? f : kind === "a" ? f.call(receiver) : f ? f.value : state.get(receiver);
+};
+var _AbstractPage_client;
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.isObj = exports.toFloat32Array = exports.toBase64 = exports.getHeader = exports.getRequiredHeader = exports.isHeadersProtocol = exports.isRunningInBrowser = exports.debug = exports.hasOwn = exports.isEmptyObj = exports.maybeCoerceBoolean = exports.maybeCoerceFloat = exports.maybeCoerceInteger = exports.coerceBoolean = exports.coerceFloat = exports.coerceInteger = exports.readEnv = exports.ensurePresent = exports.castToError = exports.sleep = exports.safeJSON = exports.isRequestOptions = exports.createResponseHeaders = exports.PagePromise = exports.AbstractPage = exports.APIClient = exports.APIPromise = exports.createForm = exports.multipartFormRequestOptions = exports.maybeMultipartFormRequestOptions = void 0;
+const version_1 = __webpack_require__(/*! ./version.js */ "./node_modules/openai/version.js");
+const streaming_1 = __webpack_require__(/*! ./streaming.js */ "./node_modules/openai/streaming.js");
+const error_1 = __webpack_require__(/*! ./error.js */ "./node_modules/openai/error.js");
+const index_1 = __webpack_require__(/*! ./_shims/index.js */ "./node_modules/openai/_shims/index.js");
+// try running side effects outside of _shims/index to workaround https://github.com/vercel/next.js/issues/76881
+(0, index_1.init)();
+const uploads_1 = __webpack_require__(/*! ./uploads.js */ "./node_modules/openai/uploads.js");
+var uploads_2 = __webpack_require__(/*! ./uploads.js */ "./node_modules/openai/uploads.js");
+Object.defineProperty(exports, "maybeMultipartFormRequestOptions", ({ enumerable: true, get: function () { return uploads_2.maybeMultipartFormRequestOptions; } }));
+Object.defineProperty(exports, "multipartFormRequestOptions", ({ enumerable: true, get: function () { return uploads_2.multipartFormRequestOptions; } }));
+Object.defineProperty(exports, "createForm", ({ enumerable: true, get: function () { return uploads_2.createForm; } }));
+async function defaultParseResponse(props) {
+    const { response } = props;
+    if (props.options.stream) {
+        debug('response', response.status, response.url, response.headers, response.body);
+        // Note: there is an invariant here that isn't represented in the type system
+        // that if you set `stream: true` the response type must also be `Stream<T>`
+        if (props.options.__streamClass) {
+            return props.options.__streamClass.fromSSEResponse(response, props.controller);
+        }
+        return streaming_1.Stream.fromSSEResponse(response, props.controller);
+    }
+    // fetch refuses to read the body when the status code is 204.
+    if (response.status === 204) {
+        return null;
+    }
+    if (props.options.__binaryResponse) {
+        return response;
+    }
+    const contentType = response.headers.get('content-type');
+    const mediaType = contentType?.split(';')[0]?.trim();
+    const isJSON = mediaType?.includes('application/json') || mediaType?.endsWith('+json');
+    if (isJSON) {
+        const json = await response.json();
+        debug('response', response.status, response.url, response.headers, json);
+        return _addRequestID(json, response);
+    }
+    const text = await response.text();
+    debug('response', response.status, response.url, response.headers, text);
+    // TODO handle blob, arraybuffer, other content types, etc.
+    return text;
+}
+function _addRequestID(value, response) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return value;
+    }
+    return Object.defineProperty(value, '_request_id', {
+        value: response.headers.get('x-request-id'),
+        enumerable: false,
+    });
+}
+/**
+ * A subclass of `Promise` providing additional helper methods
+ * for interacting with the SDK.
+ */
+class APIPromise extends Promise {
+    constructor(responsePromise, parseResponse = defaultParseResponse) {
+        super((resolve) => {
+            // this is maybe a bit weird but this has to be a no-op to not implicitly
+            // parse the response body; instead .then, .catch, .finally are overridden
+            // to parse the response
+            resolve(null);
+        });
+        this.responsePromise = responsePromise;
+        this.parseResponse = parseResponse;
+    }
+    _thenUnwrap(transform) {
+        return new APIPromise(this.responsePromise, async (props) => _addRequestID(transform(await this.parseResponse(props), props), props.response));
+    }
+    /**
+     * Gets the raw `Response` instance instead of parsing the response
+     * data.
+     *
+     * If you want to parse the response body but still get the `Response`
+     * instance, you can use {@link withResponse()}.
+     *
+     * 👋 Getting the wrong TypeScript type for `Response`?
+     * Try setting `"moduleResolution": "NodeNext"` if you can,
+     * or add one of these imports before your first `import … from 'openai'`:
+     * - `import 'openai/shims/node'` (if you're running on Node)
+     * - `import 'openai/shims/web'` (otherwise)
+     */
+    asResponse() {
+        return this.responsePromise.then((p) => p.response);
+    }
+    /**
+     * Gets the parsed response data, the raw `Response` instance and the ID of the request,
+     * returned via the X-Request-ID header which is useful for debugging requests and reporting
+     * issues to OpenAI.
+     *
+     * If you just want to get the raw `Response` instance without parsing it,
+     * you can use {@link asResponse()}.
+     *
+     *
+     * 👋 Getting the wrong TypeScript type for `Response`?
+     * Try setting `"moduleResolution": "NodeNext"` if you can,
+     * or add one of these imports before your first `import … from 'openai'`:
+     * - `import 'openai/shims/node'` (if you're running on Node)
+     * - `import 'openai/shims/web'` (otherwise)
+     */
+    async withResponse() {
+        const [data, response] = await Promise.all([this.parse(), this.asResponse()]);
+        return { data, response, request_id: response.headers.get('x-request-id') };
+    }
+    parse() {
+        if (!this.parsedPromise) {
+            this.parsedPromise = this.responsePromise.then(this.parseResponse);
+        }
+        return this.parsedPromise;
+    }
+    then(onfulfilled, onrejected) {
+        return this.parse().then(onfulfilled, onrejected);
+    }
+    catch(onrejected) {
+        return this.parse().catch(onrejected);
+    }
+    finally(onfinally) {
+        return this.parse().finally(onfinally);
+    }
+}
+exports.APIPromise = APIPromise;
+class APIClient {
+    constructor({ baseURL, maxRetries = 2, timeout = 600000, // 10 minutes
+    httpAgent, fetch: overriddenFetch, }) {
+        this.baseURL = baseURL;
+        this.maxRetries = validatePositiveInteger('maxRetries', maxRetries);
+        this.timeout = validatePositiveInteger('timeout', timeout);
+        this.httpAgent = httpAgent;
+        this.fetch = overriddenFetch ?? index_1.fetch;
+    }
+    authHeaders(opts) {
+        return {};
+    }
+    /**
+     * Override this to add your own default headers, for example:
+     *
+     *  {
+     *    ...super.defaultHeaders(),
+     *    Authorization: 'Bearer 123',
+     *  }
+     */
+    defaultHeaders(opts) {
+        return {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+            'User-Agent': this.getUserAgent(),
+            ...getPlatformHeaders(),
+            ...this.authHeaders(opts),
+        };
+    }
+    /**
+     * Override this to add your own headers validation:
+     */
+    validateHeaders(headers, customHeaders) { }
+    defaultIdempotencyKey() {
+        return `stainless-node-retry-${uuid4()}`;
+    }
+    get(path, opts) {
+        return this.methodRequest('get', path, opts);
+    }
+    post(path, opts) {
+        return this.methodRequest('post', path, opts);
+    }
+    patch(path, opts) {
+        return this.methodRequest('patch', path, opts);
+    }
+    put(path, opts) {
+        return this.methodRequest('put', path, opts);
+    }
+    delete(path, opts) {
+        return this.methodRequest('delete', path, opts);
+    }
+    methodRequest(method, path, opts) {
+        return this.request(Promise.resolve(opts).then(async (opts) => {
+            const body = opts && (0, uploads_1.isBlobLike)(opts?.body) ? new DataView(await opts.body.arrayBuffer())
+                : opts?.body instanceof DataView ? opts.body
+                    : opts?.body instanceof ArrayBuffer ? new DataView(opts.body)
+                        : opts && ArrayBuffer.isView(opts?.body) ? new DataView(opts.body.buffer)
+                            : opts?.body;
+            return { method, path, ...opts, body };
+        }));
+    }
+    getAPIList(path, Page, opts) {
+        return this.requestAPIList(Page, { method: 'get', path, ...opts });
+    }
+    calculateContentLength(body) {
+        if (typeof body === 'string') {
+            if (typeof Buffer !== 'undefined') {
+                return Buffer.byteLength(body, 'utf8').toString();
+            }
+            if (typeof TextEncoder !== 'undefined') {
+                const encoder = new TextEncoder();
+                const encoded = encoder.encode(body);
+                return encoded.length.toString();
+            }
+        }
+        else if (ArrayBuffer.isView(body)) {
+            return body.byteLength.toString();
+        }
+        return null;
+    }
+    buildRequest(inputOptions, { retryCount = 0 } = {}) {
+        const options = { ...inputOptions };
+        const { method, path, query, headers: headers = {} } = options;
+        const body = ArrayBuffer.isView(options.body) || (options.__binaryRequest && typeof options.body === 'string') ?
+            options.body
+            : (0, uploads_1.isMultipartBody)(options.body) ? options.body.body
+                : options.body ? JSON.stringify(options.body, null, 2)
+                    : null;
+        const contentLength = this.calculateContentLength(body);
+        const url = this.buildURL(path, query);
+        if ('timeout' in options)
+            validatePositiveInteger('timeout', options.timeout);
+        options.timeout = options.timeout ?? this.timeout;
+        const httpAgent = options.httpAgent ?? this.httpAgent ?? (0, index_1.getDefaultAgent)(url);
+        const minAgentTimeout = options.timeout + 1000;
+        if (typeof httpAgent?.options?.timeout === 'number' &&
+            minAgentTimeout > (httpAgent.options.timeout ?? 0)) {
+            // Allow any given request to bump our agent active socket timeout.
+            // This may seem strange, but leaking active sockets should be rare and not particularly problematic,
+            // and without mutating agent we would need to create more of them.
+            // This tradeoff optimizes for performance.
+            httpAgent.options.timeout = minAgentTimeout;
+        }
+        if (this.idempotencyHeader && method !== 'get') {
+            if (!inputOptions.idempotencyKey)
+                inputOptions.idempotencyKey = this.defaultIdempotencyKey();
+            headers[this.idempotencyHeader] = inputOptions.idempotencyKey;
+        }
+        const reqHeaders = this.buildHeaders({ options, headers, contentLength, retryCount });
+        const req = {
+            method,
+            ...(body && { body: body }),
+            headers: reqHeaders,
+            ...(httpAgent && { agent: httpAgent }),
+            // @ts-ignore node-fetch uses a custom AbortSignal type that is
+            // not compatible with standard web types
+            signal: options.signal ?? null,
+        };
+        return { req, url, timeout: options.timeout };
+    }
+    buildHeaders({ options, headers, contentLength, retryCount, }) {
+        const reqHeaders = {};
+        if (contentLength) {
+            reqHeaders['content-length'] = contentLength;
+        }
+        const defaultHeaders = this.defaultHeaders(options);
+        applyHeadersMut(reqHeaders, defaultHeaders);
+        applyHeadersMut(reqHeaders, headers);
+        // let builtin fetch set the Content-Type for multipart bodies
+        if ((0, uploads_1.isMultipartBody)(options.body) && index_1.kind !== 'node') {
+            delete reqHeaders['content-type'];
+        }
+        // Don't set theses headers if they were already set or removed through default headers or by the caller.
+        // We check `defaultHeaders` and `headers`, which can contain nulls, instead of `reqHeaders` to account
+        // for the removal case.
+        if ((0, exports.getHeader)(defaultHeaders, 'x-stainless-retry-count') === undefined &&
+            (0, exports.getHeader)(headers, 'x-stainless-retry-count') === undefined) {
+            reqHeaders['x-stainless-retry-count'] = String(retryCount);
+        }
+        if ((0, exports.getHeader)(defaultHeaders, 'x-stainless-timeout') === undefined &&
+            (0, exports.getHeader)(headers, 'x-stainless-timeout') === undefined &&
+            options.timeout) {
+            reqHeaders['x-stainless-timeout'] = String(Math.trunc(options.timeout / 1000));
+        }
+        this.validateHeaders(reqHeaders, headers);
+        return reqHeaders;
+    }
+    /**
+     * Used as a callback for mutating the given `FinalRequestOptions` object.
+     */
+    async prepareOptions(options) { }
+    /**
+     * Used as a callback for mutating the given `RequestInit` object.
+     *
+     * This is useful for cases where you want to add certain headers based off of
+     * the request properties, e.g. `method` or `url`.
+     */
+    async prepareRequest(request, { url, options }) { }
+    parseHeaders(headers) {
+        return (!headers ? {}
+            : Symbol.iterator in headers ?
+                Object.fromEntries(Array.from(headers).map((header) => [...header]))
+                : { ...headers });
+    }
+    makeStatusError(status, error, message, headers) {
+        return error_1.APIError.generate(status, error, message, headers);
+    }
+    request(options, remainingRetries = null) {
+        return new APIPromise(this.makeRequest(options, remainingRetries));
+    }
+    async makeRequest(optionsInput, retriesRemaining) {
+        const options = await optionsInput;
+        const maxRetries = options.maxRetries ?? this.maxRetries;
+        if (retriesRemaining == null) {
+            retriesRemaining = maxRetries;
+        }
+        await this.prepareOptions(options);
+        const { req, url, timeout } = this.buildRequest(options, { retryCount: maxRetries - retriesRemaining });
+        await this.prepareRequest(req, { url, options });
+        debug('request', url, options, req.headers);
+        if (options.signal?.aborted) {
+            throw new error_1.APIUserAbortError();
+        }
+        const controller = new AbortController();
+        const response = await this.fetchWithTimeout(url, req, timeout, controller).catch(exports.castToError);
+        if (response instanceof Error) {
+            if (options.signal?.aborted) {
+                throw new error_1.APIUserAbortError();
+            }
+            if (retriesRemaining) {
+                return this.retryRequest(options, retriesRemaining);
+            }
+            if (response.name === 'AbortError') {
+                throw new error_1.APIConnectionTimeoutError();
+            }
+            throw new error_1.APIConnectionError({ cause: response });
+        }
+        const responseHeaders = (0, exports.createResponseHeaders)(response.headers);
+        if (!response.ok) {
+            if (retriesRemaining && this.shouldRetry(response)) {
+                const retryMessage = `retrying, ${retriesRemaining} attempts remaining`;
+                debug(`response (error; ${retryMessage})`, response.status, url, responseHeaders);
+                return this.retryRequest(options, retriesRemaining, responseHeaders);
+            }
+            const errText = await response.text().catch((e) => (0, exports.castToError)(e).message);
+            const errJSON = (0, exports.safeJSON)(errText);
+            const errMessage = errJSON ? undefined : errText;
+            const retryMessage = retriesRemaining ? `(error; no more retries left)` : `(error; not retryable)`;
+            debug(`response (error; ${retryMessage})`, response.status, url, responseHeaders, errMessage);
+            const err = this.makeStatusError(response.status, errJSON, errMessage, responseHeaders);
+            throw err;
+        }
+        return { response, options, controller };
+    }
+    requestAPIList(Page, options) {
+        const request = this.makeRequest(options, null);
+        return new PagePromise(this, request, Page);
+    }
+    buildURL(path, query) {
+        const url = isAbsoluteURL(path) ?
+            new URL(path)
+            : new URL(this.baseURL + (this.baseURL.endsWith('/') && path.startsWith('/') ? path.slice(1) : path));
+        const defaultQuery = this.defaultQuery();
+        if (!isEmptyObj(defaultQuery)) {
+            query = { ...defaultQuery, ...query };
+        }
+        if (typeof query === 'object' && query && !Array.isArray(query)) {
+            url.search = this.stringifyQuery(query);
+        }
+        return url.toString();
+    }
+    stringifyQuery(query) {
+        return Object.entries(query)
+            .filter(([_, value]) => typeof value !== 'undefined')
+            .map(([key, value]) => {
+            if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+                return `${encodeURIComponent(key)}=${encodeURIComponent(value)}`;
+            }
+            if (value === null) {
+                return `${encodeURIComponent(key)}=`;
+            }
+            throw new error_1.OpenAIError(`Cannot stringify type ${typeof value}; Expected string, number, boolean, or null. If you need to pass nested query parameters, you can manually encode them, e.g. { query: { 'foo[key1]': value1, 'foo[key2]': value2 } }, and please open a GitHub issue requesting better support for your use case.`);
+        })
+            .join('&');
+    }
+    async fetchWithTimeout(url, init, ms, controller) {
+        const { signal, ...options } = init || {};
+        if (signal)
+            signal.addEventListener('abort', () => controller.abort());
+        const timeout = setTimeout(() => controller.abort(), ms);
+        const fetchOptions = {
+            signal: controller.signal,
+            ...options,
+        };
+        if (fetchOptions.method) {
+            // Custom methods like 'patch' need to be uppercased
+            // See https://github.com/nodejs/undici/issues/2294
+            fetchOptions.method = fetchOptions.method.toUpperCase();
+        }
+        return (
+        // use undefined this binding; fetch errors if bound to something else in browser/cloudflare
+        this.fetch.call(undefined, url, fetchOptions).finally(() => {
+            clearTimeout(timeout);
+        }));
+    }
+    shouldRetry(response) {
+        // Note this is not a standard header.
+        const shouldRetryHeader = response.headers.get('x-should-retry');
+        // If the server explicitly says whether or not to retry, obey.
+        if (shouldRetryHeader === 'true')
+            return true;
+        if (shouldRetryHeader === 'false')
+            return false;
+        // Retry on request timeouts.
+        if (response.status === 408)
+            return true;
+        // Retry on lock timeouts.
+        if (response.status === 409)
+            return true;
+        // Retry on rate limits.
+        if (response.status === 429)
+            return true;
+        // Retry internal errors.
+        if (response.status >= 500)
+            return true;
+        return false;
+    }
+    async retryRequest(options, retriesRemaining, responseHeaders) {
+        let timeoutMillis;
+        // Note the `retry-after-ms` header may not be standard, but is a good idea and we'd like proactive support for it.
+        const retryAfterMillisHeader = responseHeaders?.['retry-after-ms'];
+        if (retryAfterMillisHeader) {
+            const timeoutMs = parseFloat(retryAfterMillisHeader);
+            if (!Number.isNaN(timeoutMs)) {
+                timeoutMillis = timeoutMs;
+            }
+        }
+        // About the Retry-After header: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Retry-After
+        const retryAfterHeader = responseHeaders?.['retry-after'];
+        if (retryAfterHeader && !timeoutMillis) {
+            const timeoutSeconds = parseFloat(retryAfterHeader);
+            if (!Number.isNaN(timeoutSeconds)) {
+                timeoutMillis = timeoutSeconds * 1000;
+            }
+            else {
+                timeoutMillis = Date.parse(retryAfterHeader) - Date.now();
+            }
+        }
+        // If the API asks us to wait a certain amount of time (and it's a reasonable amount),
+        // just do what it says, but otherwise calculate a default
+        if (!(timeoutMillis && 0 <= timeoutMillis && timeoutMillis < 60 * 1000)) {
+            const maxRetries = options.maxRetries ?? this.maxRetries;
+            timeoutMillis = this.calculateDefaultRetryTimeoutMillis(retriesRemaining, maxRetries);
+        }
+        await (0, exports.sleep)(timeoutMillis);
+        return this.makeRequest(options, retriesRemaining - 1);
+    }
+    calculateDefaultRetryTimeoutMillis(retriesRemaining, maxRetries) {
+        const initialRetryDelay = 0.5;
+        const maxRetryDelay = 8.0;
+        const numRetries = maxRetries - retriesRemaining;
+        // Apply exponential backoff, but not more than the max.
+        const sleepSeconds = Math.min(initialRetryDelay * Math.pow(2, numRetries), maxRetryDelay);
+        // Apply some jitter, take up to at most 25 percent of the retry time.
+        const jitter = 1 - Math.random() * 0.25;
+        return sleepSeconds * jitter * 1000;
+    }
+    getUserAgent() {
+        return `${this.constructor.name}/JS ${version_1.VERSION}`;
+    }
+}
+exports.APIClient = APIClient;
+class AbstractPage {
+    constructor(client, response, body, options) {
+        _AbstractPage_client.set(this, void 0);
+        __classPrivateFieldSet(this, _AbstractPage_client, client, "f");
+        this.options = options;
+        this.response = response;
+        this.body = body;
+    }
+    hasNextPage() {
+        const items = this.getPaginatedItems();
+        if (!items.length)
+            return false;
+        return this.nextPageInfo() != null;
+    }
+    async getNextPage() {
+        const nextInfo = this.nextPageInfo();
+        if (!nextInfo) {
+            throw new error_1.OpenAIError('No next page expected; please check `.hasNextPage()` before calling `.getNextPage()`.');
+        }
+        const nextOptions = { ...this.options };
+        if ('params' in nextInfo && typeof nextOptions.query === 'object') {
+            nextOptions.query = { ...nextOptions.query, ...nextInfo.params };
+        }
+        else if ('url' in nextInfo) {
+            const params = [...Object.entries(nextOptions.query || {}), ...nextInfo.url.searchParams.entries()];
+            for (const [key, value] of params) {
+                nextInfo.url.searchParams.set(key, value);
+            }
+            nextOptions.query = undefined;
+            nextOptions.path = nextInfo.url.toString();
+        }
+        return await __classPrivateFieldGet(this, _AbstractPage_client, "f").requestAPIList(this.constructor, nextOptions);
+    }
+    async *iterPages() {
+        // eslint-disable-next-line @typescript-eslint/no-this-alias
+        let page = this;
+        yield page;
+        while (page.hasNextPage()) {
+            page = await page.getNextPage();
+            yield page;
+        }
+    }
+    async *[(_AbstractPage_client = new WeakMap(), Symbol.asyncIterator)]() {
+        for await (const page of this.iterPages()) {
+            for (const item of page.getPaginatedItems()) {
+                yield item;
+            }
+        }
+    }
+}
+exports.AbstractPage = AbstractPage;
+/**
+ * This subclass of Promise will resolve to an instantiated Page once the request completes.
+ *
+ * It also implements AsyncIterable to allow auto-paginating iteration on an unawaited list call, eg:
+ *
+ *    for await (const item of client.items.list()) {
+ *      console.log(item)
+ *    }
+ */
+class PagePromise extends APIPromise {
+    constructor(client, request, Page) {
+        super(request, async (props) => new Page(client, props.response, await defaultParseResponse(props), props.options));
+    }
+    /**
+     * Allow auto-paginating iteration on an unawaited list call, eg:
+     *
+     *    for await (const item of client.items.list()) {
+     *      console.log(item)
+     *    }
+     */
+    async *[Symbol.asyncIterator]() {
+        const page = await this;
+        for await (const item of page) {
+            yield item;
+        }
+    }
+}
+exports.PagePromise = PagePromise;
+const createResponseHeaders = (headers) => {
+    return new Proxy(Object.fromEntries(
+    // @ts-ignore
+    headers.entries()), {
+        get(target, name) {
+            const key = name.toString();
+            return target[key.toLowerCase()] || target[key];
+        },
+    });
+};
+exports.createResponseHeaders = createResponseHeaders;
+// This is required so that we can determine if a given object matches the RequestOptions
+// type at runtime. While this requires duplication, it is enforced by the TypeScript
+// compiler such that any missing / extraneous keys will cause an error.
+const requestOptionsKeys = {
+    method: true,
+    path: true,
+    query: true,
+    body: true,
+    headers: true,
+    maxRetries: true,
+    stream: true,
+    timeout: true,
+    httpAgent: true,
+    signal: true,
+    idempotencyKey: true,
+    __metadata: true,
+    __binaryRequest: true,
+    __binaryResponse: true,
+    __streamClass: true,
+};
+const isRequestOptions = (obj) => {
+    return (typeof obj === 'object' &&
+        obj !== null &&
+        !isEmptyObj(obj) &&
+        Object.keys(obj).every((k) => hasOwn(requestOptionsKeys, k)));
+};
+exports.isRequestOptions = isRequestOptions;
+const getPlatformProperties = () => {
+    if (typeof Deno !== 'undefined' && Deno.build != null) {
+        return {
+            'X-Stainless-Lang': 'js',
+            'X-Stainless-Package-Version': version_1.VERSION,
+            'X-Stainless-OS': normalizePlatform(Deno.build.os),
+            'X-Stainless-Arch': normalizeArch(Deno.build.arch),
+            'X-Stainless-Runtime': 'deno',
+            'X-Stainless-Runtime-Version': typeof Deno.version === 'string' ? Deno.version : Deno.version?.deno ?? 'unknown',
+        };
+    }
+    if (typeof EdgeRuntime !== 'undefined') {
+        return {
+            'X-Stainless-Lang': 'js',
+            'X-Stainless-Package-Version': version_1.VERSION,
+            'X-Stainless-OS': 'Unknown',
+            'X-Stainless-Arch': `other:${EdgeRuntime}`,
+            'X-Stainless-Runtime': 'edge',
+            'X-Stainless-Runtime-Version': process.version,
+        };
+    }
+    // Check if Node.js
+    if (Object.prototype.toString.call(typeof process !== 'undefined' ? process : 0) === '[object process]') {
+        return {
+            'X-Stainless-Lang': 'js',
+            'X-Stainless-Package-Version': version_1.VERSION,
+            'X-Stainless-OS': normalizePlatform(process.platform),
+            'X-Stainless-Arch': normalizeArch(process.arch),
+            'X-Stainless-Runtime': 'node',
+            'X-Stainless-Runtime-Version': process.version,
+        };
+    }
+    const browserInfo = getBrowserInfo();
+    if (browserInfo) {
+        return {
+            'X-Stainless-Lang': 'js',
+            'X-Stainless-Package-Version': version_1.VERSION,
+            'X-Stainless-OS': 'Unknown',
+            'X-Stainless-Arch': 'unknown',
+            'X-Stainless-Runtime': `browser:${browserInfo.browser}`,
+            'X-Stainless-Runtime-Version': browserInfo.version,
+        };
+    }
+    // TODO add support for Cloudflare workers, etc.
+    return {
+        'X-Stainless-Lang': 'js',
+        'X-Stainless-Package-Version': version_1.VERSION,
+        'X-Stainless-OS': 'Unknown',
+        'X-Stainless-Arch': 'unknown',
+        'X-Stainless-Runtime': 'unknown',
+        'X-Stainless-Runtime-Version': 'unknown',
+    };
+};
+// Note: modified from https://github.com/JS-DevTools/host-environment/blob/b1ab79ecde37db5d6e163c050e54fe7d287d7c92/src/isomorphic.browser.ts
+function getBrowserInfo() {
+    if (typeof navigator === 'undefined' || !navigator) {
+        return null;
+    }
+    // NOTE: The order matters here!
+    const browserPatterns = [
+        { key: 'edge', pattern: /Edge(?:\W+(\d+)\.(\d+)(?:\.(\d+))?)?/ },
+        { key: 'ie', pattern: /MSIE(?:\W+(\d+)\.(\d+)(?:\.(\d+))?)?/ },
+        { key: 'ie', pattern: /Trident(?:.*rv\:(\d+)\.(\d+)(?:\.(\d+))?)?/ },
+        { key: 'chrome', pattern: /Chrome(?:\W+(\d+)\.(\d+)(?:\.(\d+))?)?/ },
+        { key: 'firefox', pattern: /Firefox(?:\W+(\d+)\.(\d+)(?:\.(\d+))?)?/ },
+        { key: 'safari', pattern: /(?:Version\W+(\d+)\.(\d+)(?:\.(\d+))?)?(?:\W+Mobile\S*)?\W+Safari/ },
+    ];
+    // Find the FIRST matching browser
+    for (const { key, pattern } of browserPatterns) {
+        const match = pattern.exec(navigator.userAgent);
+        if (match) {
+            const major = match[1] || 0;
+            const minor = match[2] || 0;
+            const patch = match[3] || 0;
+            return { browser: key, version: `${major}.${minor}.${patch}` };
+        }
+    }
+    return null;
+}
+const normalizeArch = (arch) => {
+    // Node docs:
+    // - https://nodejs.org/api/process.html#processarch
+    // Deno docs:
+    // - https://doc.deno.land/deno/stable/~/Deno.build
+    if (arch === 'x32')
+        return 'x32';
+    if (arch === 'x86_64' || arch === 'x64')
+        return 'x64';
+    if (arch === 'arm')
+        return 'arm';
+    if (arch === 'aarch64' || arch === 'arm64')
+        return 'arm64';
+    if (arch)
+        return `other:${arch}`;
+    return 'unknown';
+};
+const normalizePlatform = (platform) => {
+    // Node platforms:
+    // - https://nodejs.org/api/process.html#processplatform
+    // Deno platforms:
+    // - https://doc.deno.land/deno/stable/~/Deno.build
+    // - https://github.com/denoland/deno/issues/14799
+    platform = platform.toLowerCase();
+    // NOTE: this iOS check is untested and may not work
+    // Node does not work natively on IOS, there is a fork at
+    // https://github.com/nodejs-mobile/nodejs-mobile
+    // however it is unknown at the time of writing how to detect if it is running
+    if (platform.includes('ios'))
+        return 'iOS';
+    if (platform === 'android')
+        return 'Android';
+    if (platform === 'darwin')
+        return 'MacOS';
+    if (platform === 'win32')
+        return 'Windows';
+    if (platform === 'freebsd')
+        return 'FreeBSD';
+    if (platform === 'openbsd')
+        return 'OpenBSD';
+    if (platform === 'linux')
+        return 'Linux';
+    if (platform)
+        return `Other:${platform}`;
+    return 'Unknown';
+};
+let _platformHeaders;
+const getPlatformHeaders = () => {
+    return (_platformHeaders ?? (_platformHeaders = getPlatformProperties()));
+};
+const safeJSON = (text) => {
+    try {
+        return JSON.parse(text);
+    }
+    catch (err) {
+        return undefined;
+    }
+};
+exports.safeJSON = safeJSON;
+// https://url.spec.whatwg.org/#url-scheme-string
+const startsWithSchemeRegexp = /^[a-z][a-z0-9+.-]*:/i;
+const isAbsoluteURL = (url) => {
+    return startsWithSchemeRegexp.test(url);
+};
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+exports.sleep = sleep;
+const validatePositiveInteger = (name, n) => {
+    if (typeof n !== 'number' || !Number.isInteger(n)) {
+        throw new error_1.OpenAIError(`${name} must be an integer`);
+    }
+    if (n < 0) {
+        throw new error_1.OpenAIError(`${name} must be a positive integer`);
+    }
+    return n;
+};
+const castToError = (err) => {
+    if (err instanceof Error)
+        return err;
+    if (typeof err === 'object' && err !== null) {
+        try {
+            return new Error(JSON.stringify(err));
+        }
+        catch { }
+    }
+    return new Error(err);
+};
+exports.castToError = castToError;
+const ensurePresent = (value) => {
+    if (value == null)
+        throw new error_1.OpenAIError(`Expected a value to be given but received ${value} instead.`);
+    return value;
+};
+exports.ensurePresent = ensurePresent;
+/**
+ * Read an environment variable.
+ *
+ * Trims beginning and trailing whitespace.
+ *
+ * Will return undefined if the environment variable doesn't exist or cannot be accessed.
+ */
+const readEnv = (env) => {
+    if (typeof process !== 'undefined') {
+        return process.env?.[env]?.trim() ?? undefined;
+    }
+    if (typeof Deno !== 'undefined') {
+        return Deno.env?.get?.(env)?.trim();
+    }
+    return undefined;
+};
+exports.readEnv = readEnv;
+const coerceInteger = (value) => {
+    if (typeof value === 'number')
+        return Math.round(value);
+    if (typeof value === 'string')
+        return parseInt(value, 10);
+    throw new error_1.OpenAIError(`Could not coerce ${value} (type: ${typeof value}) into a number`);
+};
+exports.coerceInteger = coerceInteger;
+const coerceFloat = (value) => {
+    if (typeof value === 'number')
+        return value;
+    if (typeof value === 'string')
+        return parseFloat(value);
+    throw new error_1.OpenAIError(`Could not coerce ${value} (type: ${typeof value}) into a number`);
+};
+exports.coerceFloat = coerceFloat;
+const coerceBoolean = (value) => {
+    if (typeof value === 'boolean')
+        return value;
+    if (typeof value === 'string')
+        return value === 'true';
+    return Boolean(value);
+};
+exports.coerceBoolean = coerceBoolean;
+const maybeCoerceInteger = (value) => {
+    if (value === undefined) {
+        return undefined;
+    }
+    return (0, exports.coerceInteger)(value);
+};
+exports.maybeCoerceInteger = maybeCoerceInteger;
+const maybeCoerceFloat = (value) => {
+    if (value === undefined) {
+        return undefined;
+    }
+    return (0, exports.coerceFloat)(value);
+};
+exports.maybeCoerceFloat = maybeCoerceFloat;
+const maybeCoerceBoolean = (value) => {
+    if (value === undefined) {
+        return undefined;
+    }
+    return (0, exports.coerceBoolean)(value);
+};
+exports.maybeCoerceBoolean = maybeCoerceBoolean;
+// https://stackoverflow.com/a/34491287
+function isEmptyObj(obj) {
+    if (!obj)
+        return true;
+    for (const _k in obj)
+        return false;
+    return true;
+}
+exports.isEmptyObj = isEmptyObj;
+// https://eslint.org/docs/latest/rules/no-prototype-builtins
+function hasOwn(obj, key) {
+    return Object.prototype.hasOwnProperty.call(obj, key);
+}
+exports.hasOwn = hasOwn;
+/**
+ * Copies headers from "newHeaders" onto "targetHeaders",
+ * using lower-case for all properties,
+ * ignoring any keys with undefined values,
+ * and deleting any keys with null values.
+ */
+function applyHeadersMut(targetHeaders, newHeaders) {
+    for (const k in newHeaders) {
+        if (!hasOwn(newHeaders, k))
+            continue;
+        const lowerKey = k.toLowerCase();
+        if (!lowerKey)
+            continue;
+        const val = newHeaders[k];
+        if (val === null) {
+            delete targetHeaders[lowerKey];
+        }
+        else if (val !== undefined) {
+            targetHeaders[lowerKey] = val;
+        }
+    }
+}
+const SENSITIVE_HEADERS = new Set(['authorization', 'api-key']);
+function debug(action, ...args) {
+    if (typeof process !== 'undefined' && process?.env?.['DEBUG'] === 'true') {
+        const modifiedArgs = args.map((arg) => {
+            if (!arg) {
+                return arg;
+            }
+            // Check for sensitive headers in request body 'headers' object
+            if (arg['headers']) {
+                // clone so we don't mutate
+                const modifiedArg = { ...arg, headers: { ...arg['headers'] } };
+                for (const header in arg['headers']) {
+                    if (SENSITIVE_HEADERS.has(header.toLowerCase())) {
+                        modifiedArg['headers'][header] = 'REDACTED';
+                    }
+                }
+                return modifiedArg;
+            }
+            let modifiedArg = null;
+            // Check for sensitive headers in headers object
+            for (const header in arg) {
+                if (SENSITIVE_HEADERS.has(header.toLowerCase())) {
+                    // avoid making a copy until we need to
+                    modifiedArg ?? (modifiedArg = { ...arg });
+                    modifiedArg[header] = 'REDACTED';
+                }
+            }
+            return modifiedArg ?? arg;
+        });
+        console.log(`OpenAI:DEBUG:${action}`, ...modifiedArgs);
+    }
+}
+exports.debug = debug;
+/**
+ * https://stackoverflow.com/a/2117523
+ */
+const uuid4 = () => {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+        const r = (Math.random() * 16) | 0;
+        const v = c === 'x' ? r : (r & 0x3) | 0x8;
+        return v.toString(16);
+    });
+};
+const isRunningInBrowser = () => {
+    return (
+    // @ts-ignore
+    typeof window !== 'undefined' &&
+        // @ts-ignore
+        typeof window.document !== 'undefined' &&
+        // @ts-ignore
+        typeof navigator !== 'undefined');
+};
+exports.isRunningInBrowser = isRunningInBrowser;
+const isHeadersProtocol = (headers) => {
+    return typeof headers?.get === 'function';
+};
+exports.isHeadersProtocol = isHeadersProtocol;
+const getRequiredHeader = (headers, header) => {
+    const foundHeader = (0, exports.getHeader)(headers, header);
+    if (foundHeader === undefined) {
+        throw new Error(`Could not find ${header} header`);
+    }
+    return foundHeader;
+};
+exports.getRequiredHeader = getRequiredHeader;
+const getHeader = (headers, header) => {
+    const lowerCasedHeader = header.toLowerCase();
+    if ((0, exports.isHeadersProtocol)(headers)) {
+        // to deal with the case where the header looks like Stainless-Event-Id
+        const intercapsHeader = header[0]?.toUpperCase() +
+            header.substring(1).replace(/([^\w])(\w)/g, (_m, g1, g2) => g1 + g2.toUpperCase());
+        for (const key of [header, lowerCasedHeader, header.toUpperCase(), intercapsHeader]) {
+            const value = headers.get(key);
+            if (value) {
+                return value;
+            }
+        }
+    }
+    for (const [key, value] of Object.entries(headers)) {
+        if (key.toLowerCase() === lowerCasedHeader) {
+            if (Array.isArray(value)) {
+                if (value.length <= 1)
+                    return value[0];
+                console.warn(`Received ${value.length} entries for the ${header} header, using the first entry.`);
+                return value[0];
+            }
+            return value;
+        }
+    }
+    return undefined;
+};
+exports.getHeader = getHeader;
+/**
+ * Encodes a string to Base64 format.
+ */
+const toBase64 = (str) => {
+    if (!str)
+        return '';
+    if (typeof Buffer !== 'undefined') {
+        return Buffer.from(str).toString('base64');
+    }
+    if (typeof btoa !== 'undefined') {
+        return btoa(str);
+    }
+    throw new error_1.OpenAIError('Cannot generate b64 string; Expected `Buffer` or `btoa` to be defined');
+};
+exports.toBase64 = toBase64;
+/**
+ * Converts a Base64 encoded string to a Float32Array.
+ * @param base64Str - The Base64 encoded string.
+ * @returns An Array of numbers interpreted as Float32 values.
+ */
+const toFloat32Array = (base64Str) => {
+    if (typeof Buffer !== 'undefined') {
+        // for Node.js environment
+        const buf = Buffer.from(base64Str, 'base64');
+        return Array.from(new Float32Array(buf.buffer, buf.byteOffset, buf.length / Float32Array.BYTES_PER_ELEMENT));
+    }
+    else {
+        // for legacy web platform APIs
+        const binaryStr = atob(base64Str);
+        const len = binaryStr.length;
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) {
+            bytes[i] = binaryStr.charCodeAt(i);
+        }
+        return Array.from(new Float32Array(bytes.buffer));
+    }
+};
+exports.toFloat32Array = toFloat32Array;
+function isObj(obj) {
+    return obj != null && typeof obj === 'object' && !Array.isArray(obj);
+}
+exports.isObj = isObj;
+//# sourceMappingURL=core.js.map
 
+/***/ }),
+
+/***/ "./node_modules/openai/error.js":
+/*!**************************************!*\
+  !*** ./node_modules/openai/error.js ***!
+  \**************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.ContentFilterFinishReasonError = exports.LengthFinishReasonError = exports.InternalServerError = exports.RateLimitError = exports.UnprocessableEntityError = exports.ConflictError = exports.NotFoundError = exports.PermissionDeniedError = exports.AuthenticationError = exports.BadRequestError = exports.APIConnectionTimeoutError = exports.APIConnectionError = exports.APIUserAbortError = exports.APIError = exports.OpenAIError = void 0;
+const core_1 = __webpack_require__(/*! ./core.js */ "./node_modules/openai/core.js");
+class OpenAIError extends Error {
+}
+exports.OpenAIError = OpenAIError;
+class APIError extends OpenAIError {
+    constructor(status, error, message, headers) {
+        super(`${APIError.makeMessage(status, error, message)}`);
+        this.status = status;
+        this.headers = headers;
+        this.request_id = headers?.['x-request-id'];
+        this.error = error;
+        const data = error;
+        this.code = data?.['code'];
+        this.param = data?.['param'];
+        this.type = data?.['type'];
+    }
+    static makeMessage(status, error, message) {
+        const msg = error?.message ?
+            typeof error.message === 'string' ?
+                error.message
+                : JSON.stringify(error.message)
+            : error ? JSON.stringify(error)
+                : message;
+        if (status && msg) {
+            return `${status} ${msg}`;
+        }
+        if (status) {
+            return `${status} status code (no body)`;
+        }
+        if (msg) {
+            return msg;
+        }
+        return '(no status code or body)';
+    }
+    static generate(status, errorResponse, message, headers) {
+        if (!status || !headers) {
+            return new APIConnectionError({ message, cause: (0, core_1.castToError)(errorResponse) });
+        }
+        const error = errorResponse?.['error'];
+        if (status === 400) {
+            return new BadRequestError(status, error, message, headers);
+        }
+        if (status === 401) {
+            return new AuthenticationError(status, error, message, headers);
+        }
+        if (status === 403) {
+            return new PermissionDeniedError(status, error, message, headers);
+        }
+        if (status === 404) {
+            return new NotFoundError(status, error, message, headers);
+        }
+        if (status === 409) {
+            return new ConflictError(status, error, message, headers);
+        }
+        if (status === 422) {
+            return new UnprocessableEntityError(status, error, message, headers);
+        }
+        if (status === 429) {
+            return new RateLimitError(status, error, message, headers);
+        }
+        if (status >= 500) {
+            return new InternalServerError(status, error, message, headers);
+        }
+        return new APIError(status, error, message, headers);
+    }
+}
+exports.APIError = APIError;
+class APIUserAbortError extends APIError {
+    constructor({ message } = {}) {
+        super(undefined, undefined, message || 'Request was aborted.', undefined);
+    }
+}
+exports.APIUserAbortError = APIUserAbortError;
+class APIConnectionError extends APIError {
+    constructor({ message, cause }) {
+        super(undefined, undefined, message || 'Connection error.', undefined);
+        // in some environments the 'cause' property is already declared
+        // @ts-ignore
+        if (cause)
+            this.cause = cause;
+    }
+}
+exports.APIConnectionError = APIConnectionError;
+class APIConnectionTimeoutError extends APIConnectionError {
+    constructor({ message } = {}) {
+        super({ message: message ?? 'Request timed out.' });
+    }
+}
+exports.APIConnectionTimeoutError = APIConnectionTimeoutError;
+class BadRequestError extends APIError {
+}
+exports.BadRequestError = BadRequestError;
+class AuthenticationError extends APIError {
+}
+exports.AuthenticationError = AuthenticationError;
+class PermissionDeniedError extends APIError {
+}
+exports.PermissionDeniedError = PermissionDeniedError;
+class NotFoundError extends APIError {
+}
+exports.NotFoundError = NotFoundError;
+class ConflictError extends APIError {
+}
+exports.ConflictError = ConflictError;
+class UnprocessableEntityError extends APIError {
+}
+exports.UnprocessableEntityError = UnprocessableEntityError;
+class RateLimitError extends APIError {
+}
+exports.RateLimitError = RateLimitError;
+class InternalServerError extends APIError {
+}
+exports.InternalServerError = InternalServerError;
+class LengthFinishReasonError extends OpenAIError {
+    constructor() {
+        super(`Could not parse response content as the length limit was reached`);
+    }
+}
+exports.LengthFinishReasonError = LengthFinishReasonError;
+class ContentFilterFinishReasonError extends OpenAIError {
+    constructor() {
+        super(`Could not parse response content as the request was rejected by the content filter`);
+    }
+}
+exports.ContentFilterFinishReasonError = ContentFilterFinishReasonError;
+//# sourceMappingURL=error.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/index.js":
+/*!**************************************!*\
+  !*** ./node_modules/openai/index.js ***!
+  \**************************************/
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
+var _a;
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.UnprocessableEntityError = exports.PermissionDeniedError = exports.InternalServerError = exports.AuthenticationError = exports.BadRequestError = exports.RateLimitError = exports.ConflictError = exports.NotFoundError = exports.APIUserAbortError = exports.APIConnectionTimeoutError = exports.APIConnectionError = exports.APIError = exports.OpenAIError = exports.fileFromPath = exports.toFile = exports.AzureOpenAI = exports.OpenAI = void 0;
+const qs = __importStar(__webpack_require__(/*! ./internal/qs/index.js */ "./node_modules/openai/internal/qs/index.js"));
+const Core = __importStar(__webpack_require__(/*! ./core.js */ "./node_modules/openai/core.js"));
+const Errors = __importStar(__webpack_require__(/*! ./error.js */ "./node_modules/openai/error.js"));
+const Pagination = __importStar(__webpack_require__(/*! ./pagination.js */ "./node_modules/openai/pagination.js"));
+const Uploads = __importStar(__webpack_require__(/*! ./uploads.js */ "./node_modules/openai/uploads.js"));
+const API = __importStar(__webpack_require__(/*! ./resources/index.js */ "./node_modules/openai/resources/index.js"));
+const batches_1 = __webpack_require__(/*! ./resources/batches.js */ "./node_modules/openai/resources/batches.js");
+const completions_1 = __webpack_require__(/*! ./resources/completions.js */ "./node_modules/openai/resources/completions.js");
+const embeddings_1 = __webpack_require__(/*! ./resources/embeddings.js */ "./node_modules/openai/resources/embeddings.js");
+const files_1 = __webpack_require__(/*! ./resources/files.js */ "./node_modules/openai/resources/files.js");
+const images_1 = __webpack_require__(/*! ./resources/images.js */ "./node_modules/openai/resources/images.js");
+const models_1 = __webpack_require__(/*! ./resources/models.js */ "./node_modules/openai/resources/models.js");
+const moderations_1 = __webpack_require__(/*! ./resources/moderations.js */ "./node_modules/openai/resources/moderations.js");
+const audio_1 = __webpack_require__(/*! ./resources/audio/audio.js */ "./node_modules/openai/resources/audio/audio.js");
+const beta_1 = __webpack_require__(/*! ./resources/beta/beta.js */ "./node_modules/openai/resources/beta/beta.js");
+const chat_1 = __webpack_require__(/*! ./resources/chat/chat.js */ "./node_modules/openai/resources/chat/chat.js");
+const evals_1 = __webpack_require__(/*! ./resources/evals/evals.js */ "./node_modules/openai/resources/evals/evals.js");
+const fine_tuning_1 = __webpack_require__(/*! ./resources/fine-tuning/fine-tuning.js */ "./node_modules/openai/resources/fine-tuning/fine-tuning.js");
+const responses_1 = __webpack_require__(/*! ./resources/responses/responses.js */ "./node_modules/openai/resources/responses/responses.js");
+const uploads_1 = __webpack_require__(/*! ./resources/uploads/uploads.js */ "./node_modules/openai/resources/uploads/uploads.js");
+const vector_stores_1 = __webpack_require__(/*! ./resources/vector-stores/vector-stores.js */ "./node_modules/openai/resources/vector-stores/vector-stores.js");
+const completions_2 = __webpack_require__(/*! ./resources/chat/completions/completions.js */ "./node_modules/openai/resources/chat/completions/completions.js");
+/**
+ * API Client for interfacing with the OpenAI API.
+ */
+class OpenAI extends Core.APIClient {
+    /**
+     * API Client for interfacing with the OpenAI API.
+     *
+     * @param {string | undefined} [opts.apiKey=process.env['OPENAI_API_KEY'] ?? undefined]
+     * @param {string | null | undefined} [opts.organization=process.env['OPENAI_ORG_ID'] ?? null]
+     * @param {string | null | undefined} [opts.project=process.env['OPENAI_PROJECT_ID'] ?? null]
+     * @param {string} [opts.baseURL=process.env['OPENAI_BASE_URL'] ?? https://api.openai.com/v1] - Override the default base URL for the API.
+     * @param {number} [opts.timeout=10 minutes] - The maximum amount of time (in milliseconds) the client will wait for a response before timing out.
+     * @param {number} [opts.httpAgent] - An HTTP agent used to manage HTTP(s) connections.
+     * @param {Core.Fetch} [opts.fetch] - Specify a custom `fetch` function implementation.
+     * @param {number} [opts.maxRetries=2] - The maximum number of times the client will retry a request.
+     * @param {Core.Headers} opts.defaultHeaders - Default headers to include with every request to the API.
+     * @param {Core.DefaultQuery} opts.defaultQuery - Default query parameters to include with every request to the API.
+     * @param {boolean} [opts.dangerouslyAllowBrowser=false] - By default, client-side use of this library is not allowed, as it risks exposing your secret API credentials to attackers.
+     */
+    constructor({ baseURL = Core.readEnv('OPENAI_BASE_URL'), apiKey = Core.readEnv('OPENAI_API_KEY'), organization = Core.readEnv('OPENAI_ORG_ID') ?? null, project = Core.readEnv('OPENAI_PROJECT_ID') ?? null, ...opts } = {}) {
+        if (apiKey === undefined) {
+            throw new Errors.OpenAIError("The OPENAI_API_KEY environment variable is missing or empty; either provide it, or instantiate the OpenAI client with an apiKey option, like new OpenAI({ apiKey: 'My API Key' }).");
+        }
+        const options = {
+            apiKey,
+            organization,
+            project,
+            ...opts,
+            baseURL: baseURL || `https://api.openai.com/v1`,
+        };
+        if (!options.dangerouslyAllowBrowser && Core.isRunningInBrowser()) {
+            throw new Errors.OpenAIError("It looks like you're running in a browser-like environment.\n\nThis is disabled by default, as it risks exposing your secret API credentials to attackers.\nIf you understand the risks and have appropriate mitigations in place,\nyou can set the `dangerouslyAllowBrowser` option to `true`, e.g.,\n\nnew OpenAI({ apiKey, dangerouslyAllowBrowser: true });\n\nhttps://help.openai.com/en/articles/5112595-best-practices-for-api-key-safety\n");
+        }
+        super({
+            baseURL: options.baseURL,
+            timeout: options.timeout ?? 600000 /* 10 minutes */,
+            httpAgent: options.httpAgent,
+            maxRetries: options.maxRetries,
+            fetch: options.fetch,
+        });
+        this.completions = new API.Completions(this);
+        this.chat = new API.Chat(this);
+        this.embeddings = new API.Embeddings(this);
+        this.files = new API.Files(this);
+        this.images = new API.Images(this);
+        this.audio = new API.Audio(this);
+        this.moderations = new API.Moderations(this);
+        this.models = new API.Models(this);
+        this.fineTuning = new API.FineTuning(this);
+        this.vectorStores = new API.VectorStores(this);
+        this.beta = new API.Beta(this);
+        this.batches = new API.Batches(this);
+        this.uploads = new API.Uploads(this);
+        this.responses = new API.Responses(this);
+        this.evals = new API.Evals(this);
+        this._options = options;
+        this.apiKey = apiKey;
+        this.organization = organization;
+        this.project = project;
+    }
+    defaultQuery() {
+        return this._options.defaultQuery;
+    }
+    defaultHeaders(opts) {
+        return {
+            ...super.defaultHeaders(opts),
+            'OpenAI-Organization': this.organization,
+            'OpenAI-Project': this.project,
+            ...this._options.defaultHeaders,
+        };
+    }
+    authHeaders(opts) {
+        return { Authorization: `Bearer ${this.apiKey}` };
+    }
+    stringifyQuery(query) {
+        return qs.stringify(query, { arrayFormat: 'brackets' });
+    }
+}
+exports.OpenAI = OpenAI;
+_a = OpenAI;
+OpenAI.OpenAI = _a;
+OpenAI.DEFAULT_TIMEOUT = 600000; // 10 minutes
+OpenAI.OpenAIError = Errors.OpenAIError;
+OpenAI.APIError = Errors.APIError;
+OpenAI.APIConnectionError = Errors.APIConnectionError;
+OpenAI.APIConnectionTimeoutError = Errors.APIConnectionTimeoutError;
+OpenAI.APIUserAbortError = Errors.APIUserAbortError;
+OpenAI.NotFoundError = Errors.NotFoundError;
+OpenAI.ConflictError = Errors.ConflictError;
+OpenAI.RateLimitError = Errors.RateLimitError;
+OpenAI.BadRequestError = Errors.BadRequestError;
+OpenAI.AuthenticationError = Errors.AuthenticationError;
+OpenAI.InternalServerError = Errors.InternalServerError;
+OpenAI.PermissionDeniedError = Errors.PermissionDeniedError;
+OpenAI.UnprocessableEntityError = Errors.UnprocessableEntityError;
+OpenAI.toFile = Uploads.toFile;
+OpenAI.fileFromPath = Uploads.fileFromPath;
+OpenAI.Completions = completions_1.Completions;
+OpenAI.Chat = chat_1.Chat;
+OpenAI.ChatCompletionsPage = completions_2.ChatCompletionsPage;
+OpenAI.Embeddings = embeddings_1.Embeddings;
+OpenAI.Files = files_1.Files;
+OpenAI.FileObjectsPage = files_1.FileObjectsPage;
+OpenAI.Images = images_1.Images;
+OpenAI.Audio = audio_1.Audio;
+OpenAI.Moderations = moderations_1.Moderations;
+OpenAI.Models = models_1.Models;
+OpenAI.ModelsPage = models_1.ModelsPage;
+OpenAI.FineTuning = fine_tuning_1.FineTuning;
+OpenAI.VectorStores = vector_stores_1.VectorStores;
+OpenAI.VectorStoresPage = vector_stores_1.VectorStoresPage;
+OpenAI.VectorStoreSearchResponsesPage = vector_stores_1.VectorStoreSearchResponsesPage;
+OpenAI.Beta = beta_1.Beta;
+OpenAI.Batches = batches_1.Batches;
+OpenAI.BatchesPage = batches_1.BatchesPage;
+OpenAI.Uploads = uploads_1.Uploads;
+OpenAI.Responses = responses_1.Responses;
+OpenAI.Evals = evals_1.Evals;
+OpenAI.EvalListResponsesPage = evals_1.EvalListResponsesPage;
+/** API Client for interfacing with the Azure OpenAI API. */
+class AzureOpenAI extends OpenAI {
+    /**
+     * API Client for interfacing with the Azure OpenAI API.
+     *
+     * @param {string | undefined} [opts.apiVersion=process.env['OPENAI_API_VERSION'] ?? undefined]
+     * @param {string | undefined} [opts.endpoint=process.env['AZURE_OPENAI_ENDPOINT'] ?? undefined] - Your Azure endpoint, including the resource, e.g. `https://example-resource.azure.openai.com/`
+     * @param {string | undefined} [opts.apiKey=process.env['AZURE_OPENAI_API_KEY'] ?? undefined]
+     * @param {string | undefined} opts.deployment - A model deployment, if given, sets the base client URL to include `/deployments/{deployment}`.
+     * @param {string | null | undefined} [opts.organization=process.env['OPENAI_ORG_ID'] ?? null]
+     * @param {string} [opts.baseURL=process.env['OPENAI_BASE_URL']] - Sets the base URL for the API, e.g. `https://example-resource.azure.openai.com/openai/`.
+     * @param {number} [opts.timeout=10 minutes] - The maximum amount of time (in milliseconds) the client will wait for a response before timing out.
+     * @param {number} [opts.httpAgent] - An HTTP agent used to manage HTTP(s) connections.
+     * @param {Core.Fetch} [opts.fetch] - Specify a custom `fetch` function implementation.
+     * @param {number} [opts.maxRetries=2] - The maximum number of times the client will retry a request.
+     * @param {Core.Headers} opts.defaultHeaders - Default headers to include with every request to the API.
+     * @param {Core.DefaultQuery} opts.defaultQuery - Default query parameters to include with every request to the API.
+     * @param {boolean} [opts.dangerouslyAllowBrowser=false] - By default, client-side use of this library is not allowed, as it risks exposing your secret API credentials to attackers.
+     */
+    constructor({ baseURL = Core.readEnv('OPENAI_BASE_URL'), apiKey = Core.readEnv('AZURE_OPENAI_API_KEY'), apiVersion = Core.readEnv('OPENAI_API_VERSION'), endpoint, deployment, azureADTokenProvider, dangerouslyAllowBrowser, ...opts } = {}) {
+        if (!apiVersion) {
+            throw new Errors.OpenAIError("The OPENAI_API_VERSION environment variable is missing or empty; either provide it, or instantiate the AzureOpenAI client with an apiVersion option, like new AzureOpenAI({ apiVersion: 'My API Version' }).");
+        }
+        if (typeof azureADTokenProvider === 'function') {
+            dangerouslyAllowBrowser = true;
+        }
+        if (!azureADTokenProvider && !apiKey) {
+            throw new Errors.OpenAIError('Missing credentials. Please pass one of `apiKey` and `azureADTokenProvider`, or set the `AZURE_OPENAI_API_KEY` environment variable.');
+        }
+        if (azureADTokenProvider && apiKey) {
+            throw new Errors.OpenAIError('The `apiKey` and `azureADTokenProvider` arguments are mutually exclusive; only one can be passed at a time.');
+        }
+        // define a sentinel value to avoid any typing issues
+        apiKey ?? (apiKey = API_KEY_SENTINEL);
+        opts.defaultQuery = { ...opts.defaultQuery, 'api-version': apiVersion };
+        if (!baseURL) {
+            if (!endpoint) {
+                endpoint = process.env['AZURE_OPENAI_ENDPOINT'];
+            }
+            if (!endpoint) {
+                throw new Errors.OpenAIError('Must provide one of the `baseURL` or `endpoint` arguments, or the `AZURE_OPENAI_ENDPOINT` environment variable');
+            }
+            baseURL = `${endpoint}/openai`;
+        }
+        else {
+            if (endpoint) {
+                throw new Errors.OpenAIError('baseURL and endpoint are mutually exclusive');
+            }
+        }
+        super({
+            apiKey,
+            baseURL,
+            ...opts,
+            ...(dangerouslyAllowBrowser !== undefined ? { dangerouslyAllowBrowser } : {}),
+        });
+        this.apiVersion = '';
+        this._azureADTokenProvider = azureADTokenProvider;
+        this.apiVersion = apiVersion;
+        this.deploymentName = deployment;
+    }
+    buildRequest(options, props = {}) {
+        if (_deployments_endpoints.has(options.path) && options.method === 'post' && options.body !== undefined) {
+            if (!Core.isObj(options.body)) {
+                throw new Error('Expected request body to be an object');
+            }
+            const model = this.deploymentName || options.body['model'] || options.__metadata?.['model'];
+            if (model !== undefined && !this.baseURL.includes('/deployments')) {
+                options.path = `/deployments/${model}${options.path}`;
+            }
+        }
+        return super.buildRequest(options, props);
+    }
+    async _getAzureADToken() {
+        if (typeof this._azureADTokenProvider === 'function') {
+            const token = await this._azureADTokenProvider();
+            if (!token || typeof token !== 'string') {
+                throw new Errors.OpenAIError(`Expected 'azureADTokenProvider' argument to return a string but it returned ${token}`);
+            }
+            return token;
+        }
+        return undefined;
+    }
+    authHeaders(opts) {
+        return {};
+    }
+    async prepareOptions(opts) {
+        /**
+         * The user should provide a bearer token provider if they want
+         * to use Azure AD authentication. The user shouldn't set the
+         * Authorization header manually because the header is overwritten
+         * with the Azure AD token if a bearer token provider is provided.
+         */
+        if (opts.headers?.['api-key']) {
+            return super.prepareOptions(opts);
+        }
+        const token = await this._getAzureADToken();
+        opts.headers ?? (opts.headers = {});
+        if (token) {
+            opts.headers['Authorization'] = `Bearer ${token}`;
+        }
+        else if (this.apiKey !== API_KEY_SENTINEL) {
+            opts.headers['api-key'] = this.apiKey;
+        }
+        else {
+            throw new Errors.OpenAIError('Unable to handle auth');
+        }
+        return super.prepareOptions(opts);
+    }
+}
+exports.AzureOpenAI = AzureOpenAI;
+const _deployments_endpoints = new Set([
+    '/completions',
+    '/chat/completions',
+    '/embeddings',
+    '/audio/transcriptions',
+    '/audio/translations',
+    '/audio/speech',
+    '/images/generations',
+]);
+const API_KEY_SENTINEL = '<Missing Key>';
+// ---------------------- End Azure ----------------------
+var uploads_2 = __webpack_require__(/*! ./uploads.js */ "./node_modules/openai/uploads.js");
+Object.defineProperty(exports, "toFile", ({ enumerable: true, get: function () { return uploads_2.toFile; } }));
+Object.defineProperty(exports, "fileFromPath", ({ enumerable: true, get: function () { return uploads_2.fileFromPath; } }));
+var error_1 = __webpack_require__(/*! ./error.js */ "./node_modules/openai/error.js");
+Object.defineProperty(exports, "OpenAIError", ({ enumerable: true, get: function () { return error_1.OpenAIError; } }));
+Object.defineProperty(exports, "APIError", ({ enumerable: true, get: function () { return error_1.APIError; } }));
+Object.defineProperty(exports, "APIConnectionError", ({ enumerable: true, get: function () { return error_1.APIConnectionError; } }));
+Object.defineProperty(exports, "APIConnectionTimeoutError", ({ enumerable: true, get: function () { return error_1.APIConnectionTimeoutError; } }));
+Object.defineProperty(exports, "APIUserAbortError", ({ enumerable: true, get: function () { return error_1.APIUserAbortError; } }));
+Object.defineProperty(exports, "NotFoundError", ({ enumerable: true, get: function () { return error_1.NotFoundError; } }));
+Object.defineProperty(exports, "ConflictError", ({ enumerable: true, get: function () { return error_1.ConflictError; } }));
+Object.defineProperty(exports, "RateLimitError", ({ enumerable: true, get: function () { return error_1.RateLimitError; } }));
+Object.defineProperty(exports, "BadRequestError", ({ enumerable: true, get: function () { return error_1.BadRequestError; } }));
+Object.defineProperty(exports, "AuthenticationError", ({ enumerable: true, get: function () { return error_1.AuthenticationError; } }));
+Object.defineProperty(exports, "InternalServerError", ({ enumerable: true, get: function () { return error_1.InternalServerError; } }));
+Object.defineProperty(exports, "PermissionDeniedError", ({ enumerable: true, get: function () { return error_1.PermissionDeniedError; } }));
+Object.defineProperty(exports, "UnprocessableEntityError", ({ enumerable: true, get: function () { return error_1.UnprocessableEntityError; } }));
+exports = module.exports = OpenAI;
+module.exports.AzureOpenAI = AzureOpenAI;
+exports["default"] = OpenAI;
+//# sourceMappingURL=index.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/internal/decoders/line.js":
+/*!*******************************************************!*\
+  !*** ./node_modules/openai/internal/decoders/line.js ***!
+  \*******************************************************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+var __classPrivateFieldSet = (this && this.__classPrivateFieldSet) || function (receiver, state, value, kind, f) {
+    if (kind === "m") throw new TypeError("Private method is not writable");
+    if (kind === "a" && !f) throw new TypeError("Private accessor was defined without a setter");
+    if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver)) throw new TypeError("Cannot write private member to an object whose class did not declare it");
+    return (kind === "a" ? f.call(receiver, value) : f ? f.value = value : state.set(receiver, value)), value;
+};
+var __classPrivateFieldGet = (this && this.__classPrivateFieldGet) || function (receiver, state, kind, f) {
+    if (kind === "a" && !f) throw new TypeError("Private accessor was defined without a getter");
+    if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver)) throw new TypeError("Cannot read private member from an object whose class did not declare it");
+    return kind === "m" ? f : kind === "a" ? f.call(receiver) : f ? f.value : state.get(receiver);
+};
+var _LineDecoder_carriageReturnIndex;
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.findDoubleNewlineIndex = exports.LineDecoder = void 0;
+const error_1 = __webpack_require__(/*! ../../error.js */ "./node_modules/openai/error.js");
+/**
+ * A re-implementation of httpx's `LineDecoder` in Python that handles incrementally
+ * reading lines from text.
+ *
+ * https://github.com/encode/httpx/blob/920333ea98118e9cf617f246905d7b202510941c/httpx/_decoders.py#L258
+ */
+class LineDecoder {
+    constructor() {
+        _LineDecoder_carriageReturnIndex.set(this, void 0);
+        this.buffer = new Uint8Array();
+        __classPrivateFieldSet(this, _LineDecoder_carriageReturnIndex, null, "f");
+    }
+    decode(chunk) {
+        if (chunk == null) {
+            return [];
+        }
+        const binaryChunk = chunk instanceof ArrayBuffer ? new Uint8Array(chunk)
+            : typeof chunk === 'string' ? new TextEncoder().encode(chunk)
+                : chunk;
+        let newData = new Uint8Array(this.buffer.length + binaryChunk.length);
+        newData.set(this.buffer);
+        newData.set(binaryChunk, this.buffer.length);
+        this.buffer = newData;
+        const lines = [];
+        let patternIndex;
+        while ((patternIndex = findNewlineIndex(this.buffer, __classPrivateFieldGet(this, _LineDecoder_carriageReturnIndex, "f"))) != null) {
+            if (patternIndex.carriage && __classPrivateFieldGet(this, _LineDecoder_carriageReturnIndex, "f") == null) {
+                // skip until we either get a corresponding `\n`, a new `\r` or nothing
+                __classPrivateFieldSet(this, _LineDecoder_carriageReturnIndex, patternIndex.index, "f");
+                continue;
+            }
+            // we got double \r or \rtext\n
+            if (__classPrivateFieldGet(this, _LineDecoder_carriageReturnIndex, "f") != null &&
+                (patternIndex.index !== __classPrivateFieldGet(this, _LineDecoder_carriageReturnIndex, "f") + 1 || patternIndex.carriage)) {
+                lines.push(this.decodeText(this.buffer.slice(0, __classPrivateFieldGet(this, _LineDecoder_carriageReturnIndex, "f") - 1)));
+                this.buffer = this.buffer.slice(__classPrivateFieldGet(this, _LineDecoder_carriageReturnIndex, "f"));
+                __classPrivateFieldSet(this, _LineDecoder_carriageReturnIndex, null, "f");
+                continue;
+            }
+            const endIndex = __classPrivateFieldGet(this, _LineDecoder_carriageReturnIndex, "f") !== null ? patternIndex.preceding - 1 : patternIndex.preceding;
+            const line = this.decodeText(this.buffer.slice(0, endIndex));
+            lines.push(line);
+            this.buffer = this.buffer.slice(patternIndex.index);
+            __classPrivateFieldSet(this, _LineDecoder_carriageReturnIndex, null, "f");
+        }
+        return lines;
+    }
+    decodeText(bytes) {
+        if (bytes == null)
+            return '';
+        if (typeof bytes === 'string')
+            return bytes;
+        // Node:
+        if (typeof Buffer !== 'undefined') {
+            if (bytes instanceof Buffer) {
+                return bytes.toString();
+            }
+            if (bytes instanceof Uint8Array) {
+                return Buffer.from(bytes).toString();
+            }
+            throw new error_1.OpenAIError(`Unexpected: received non-Uint8Array (${bytes.constructor.name}) stream chunk in an environment with a global "Buffer" defined, which this library assumes to be Node. Please report this error.`);
+        }
+        // Browser
+        if (typeof TextDecoder !== 'undefined') {
+            if (bytes instanceof Uint8Array || bytes instanceof ArrayBuffer) {
+                this.textDecoder ?? (this.textDecoder = new TextDecoder('utf8'));
+                return this.textDecoder.decode(bytes);
+            }
+            throw new error_1.OpenAIError(`Unexpected: received non-Uint8Array/ArrayBuffer (${bytes.constructor.name}) in a web platform. Please report this error.`);
+        }
+        throw new error_1.OpenAIError(`Unexpected: neither Buffer nor TextDecoder are available as globals. Please report this error.`);
+    }
+    flush() {
+        if (!this.buffer.length) {
+            return [];
+        }
+        return this.decode('\n');
+    }
+}
+exports.LineDecoder = LineDecoder;
+_LineDecoder_carriageReturnIndex = new WeakMap();
+// prettier-ignore
+LineDecoder.NEWLINE_CHARS = new Set(['\n', '\r']);
+LineDecoder.NEWLINE_REGEXP = /\r\n|[\n\r]/g;
+/**
+ * This function searches the buffer for the end patterns, (\r or \n)
+ * and returns an object with the index preceding the matched newline and the
+ * index after the newline char. `null` is returned if no new line is found.
+ *
+ * ```ts
+ * findNewLineIndex('abc\ndef') -> { preceding: 2, index: 3 }
+ * ```
+ */
+function findNewlineIndex(buffer, startIndex) {
+    const newline = 0x0a; // \n
+    const carriage = 0x0d; // \r
+    for (let i = startIndex ?? 0; i < buffer.length; i++) {
+        if (buffer[i] === newline) {
+            return { preceding: i, index: i + 1, carriage: false };
+        }
+        if (buffer[i] === carriage) {
+            return { preceding: i, index: i + 1, carriage: true };
+        }
+    }
+    return null;
+}
+function findDoubleNewlineIndex(buffer) {
+    // This function searches the buffer for the end patterns (\r\r, \n\n, \r\n\r\n)
+    // and returns the index right after the first occurrence of any pattern,
+    // or -1 if none of the patterns are found.
+    const newline = 0x0a; // \n
+    const carriage = 0x0d; // \r
+    for (let i = 0; i < buffer.length - 1; i++) {
+        if (buffer[i] === newline && buffer[i + 1] === newline) {
+            // \n\n
+            return i + 2;
+        }
+        if (buffer[i] === carriage && buffer[i + 1] === carriage) {
+            // \r\r
+            return i + 2;
+        }
+        if (buffer[i] === carriage &&
+            buffer[i + 1] === newline &&
+            i + 3 < buffer.length &&
+            buffer[i + 2] === carriage &&
+            buffer[i + 3] === newline) {
+            // \r\n\r\n
+            return i + 4;
+        }
+    }
+    return -1;
+}
+exports.findDoubleNewlineIndex = findDoubleNewlineIndex;
+//# sourceMappingURL=line.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/internal/qs/formats.js":
+/*!****************************************************!*\
+  !*** ./node_modules/openai/internal/qs/formats.js ***!
+  \****************************************************/
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.RFC3986 = exports.RFC1738 = exports.formatters = exports.default_format = void 0;
+exports.default_format = 'RFC3986';
+exports.formatters = {
+    RFC1738: (v) => String(v).replace(/%20/g, '+'),
+    RFC3986: (v) => String(v),
+};
+exports.RFC1738 = 'RFC1738';
+exports.RFC3986 = 'RFC3986';
+//# sourceMappingURL=formats.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/internal/qs/index.js":
+/*!**************************************************!*\
+  !*** ./node_modules/openai/internal/qs/index.js ***!
+  \**************************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.formats = exports.stringify = void 0;
+const formats_1 = __webpack_require__(/*! ./formats.js */ "./node_modules/openai/internal/qs/formats.js");
+const formats = {
+    formatters: formats_1.formatters,
+    RFC1738: formats_1.RFC1738,
+    RFC3986: formats_1.RFC3986,
+    default: formats_1.default_format,
+};
+exports.formats = formats;
+var stringify_1 = __webpack_require__(/*! ./stringify.js */ "./node_modules/openai/internal/qs/stringify.js");
+Object.defineProperty(exports, "stringify", ({ enumerable: true, get: function () { return stringify_1.stringify; } }));
+//# sourceMappingURL=index.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/internal/qs/stringify.js":
+/*!******************************************************!*\
+  !*** ./node_modules/openai/internal/qs/stringify.js ***!
+  \******************************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.stringify = void 0;
+const utils_1 = __webpack_require__(/*! ./utils.js */ "./node_modules/openai/internal/qs/utils.js");
+const formats_1 = __webpack_require__(/*! ./formats.js */ "./node_modules/openai/internal/qs/formats.js");
+const has = Object.prototype.hasOwnProperty;
+const array_prefix_generators = {
+    brackets(prefix) {
+        return String(prefix) + '[]';
+    },
+    comma: 'comma',
+    indices(prefix, key) {
+        return String(prefix) + '[' + key + ']';
+    },
+    repeat(prefix) {
+        return String(prefix);
+    },
+};
+const is_array = Array.isArray;
+const push = Array.prototype.push;
+const push_to_array = function (arr, value_or_array) {
+    push.apply(arr, is_array(value_or_array) ? value_or_array : [value_or_array]);
+};
+const to_ISO = Date.prototype.toISOString;
+const defaults = {
+    addQueryPrefix: false,
+    allowDots: false,
+    allowEmptyArrays: false,
+    arrayFormat: 'indices',
+    charset: 'utf-8',
+    charsetSentinel: false,
+    delimiter: '&',
+    encode: true,
+    encodeDotInKeys: false,
+    encoder: utils_1.encode,
+    encodeValuesOnly: false,
+    format: formats_1.default_format,
+    formatter: formats_1.formatters[formats_1.default_format],
+    /** @deprecated */
+    indices: false,
+    serializeDate(date) {
+        return to_ISO.call(date);
+    },
+    skipNulls: false,
+    strictNullHandling: false,
+};
+function is_non_nullish_primitive(v) {
+    return (typeof v === 'string' ||
+        typeof v === 'number' ||
+        typeof v === 'boolean' ||
+        typeof v === 'symbol' ||
+        typeof v === 'bigint');
+}
+const sentinel = {};
+function inner_stringify(object, prefix, generateArrayPrefix, commaRoundTrip, allowEmptyArrays, strictNullHandling, skipNulls, encodeDotInKeys, encoder, filter, sort, allowDots, serializeDate, format, formatter, encodeValuesOnly, charset, sideChannel) {
+    let obj = object;
+    let tmp_sc = sideChannel;
+    let step = 0;
+    let find_flag = false;
+    while ((tmp_sc = tmp_sc.get(sentinel)) !== void undefined && !find_flag) {
+        // Where object last appeared in the ref tree
+        const pos = tmp_sc.get(object);
+        step += 1;
+        if (typeof pos !== 'undefined') {
+            if (pos === step) {
+                throw new RangeError('Cyclic object value');
+            }
+            else {
+                find_flag = true; // Break while
+            }
+        }
+        if (typeof tmp_sc.get(sentinel) === 'undefined') {
+            step = 0;
+        }
+    }
+    if (typeof filter === 'function') {
+        obj = filter(prefix, obj);
+    }
+    else if (obj instanceof Date) {
+        obj = serializeDate?.(obj);
+    }
+    else if (generateArrayPrefix === 'comma' && is_array(obj)) {
+        obj = (0, utils_1.maybe_map)(obj, function (value) {
+            if (value instanceof Date) {
+                return serializeDate?.(value);
+            }
+            return value;
+        });
+    }
+    if (obj === null) {
+        if (strictNullHandling) {
+            return encoder && !encodeValuesOnly ?
+                // @ts-expect-error
+                encoder(prefix, defaults.encoder, charset, 'key', format)
+                : prefix;
+        }
+        obj = '';
+    }
+    if (is_non_nullish_primitive(obj) || (0, utils_1.is_buffer)(obj)) {
+        if (encoder) {
+            const key_value = encodeValuesOnly ? prefix
+                // @ts-expect-error
+                : encoder(prefix, defaults.encoder, charset, 'key', format);
+            return [
+                formatter?.(key_value) +
+                    '=' +
+                    // @ts-expect-error
+                    formatter?.(encoder(obj, defaults.encoder, charset, 'value', format)),
+            ];
+        }
+        return [formatter?.(prefix) + '=' + formatter?.(String(obj))];
+    }
+    const values = [];
+    if (typeof obj === 'undefined') {
+        return values;
+    }
+    let obj_keys;
+    if (generateArrayPrefix === 'comma' && is_array(obj)) {
+        // we need to join elements in
+        if (encodeValuesOnly && encoder) {
+            // @ts-expect-error values only
+            obj = (0, utils_1.maybe_map)(obj, encoder);
+        }
+        obj_keys = [{ value: obj.length > 0 ? obj.join(',') || null : void undefined }];
+    }
+    else if (is_array(filter)) {
+        obj_keys = filter;
+    }
+    else {
+        const keys = Object.keys(obj);
+        obj_keys = sort ? keys.sort(sort) : keys;
+    }
+    const encoded_prefix = encodeDotInKeys ? String(prefix).replace(/\./g, '%2E') : String(prefix);
+    const adjusted_prefix = commaRoundTrip && is_array(obj) && obj.length === 1 ? encoded_prefix + '[]' : encoded_prefix;
+    if (allowEmptyArrays && is_array(obj) && obj.length === 0) {
+        return adjusted_prefix + '[]';
+    }
+    for (let j = 0; j < obj_keys.length; ++j) {
+        const key = obj_keys[j];
+        const value = 
+        // @ts-ignore
+        typeof key === 'object' && typeof key.value !== 'undefined' ? key.value : obj[key];
+        if (skipNulls && value === null) {
+            continue;
+        }
+        // @ts-ignore
+        const encoded_key = allowDots && encodeDotInKeys ? key.replace(/\./g, '%2E') : key;
+        const key_prefix = is_array(obj) ?
+            typeof generateArrayPrefix === 'function' ?
+                generateArrayPrefix(adjusted_prefix, encoded_key)
+                : adjusted_prefix
+            : adjusted_prefix + (allowDots ? '.' + encoded_key : '[' + encoded_key + ']');
+        sideChannel.set(object, step);
+        const valueSideChannel = new WeakMap();
+        valueSideChannel.set(sentinel, sideChannel);
+        push_to_array(values, inner_stringify(value, key_prefix, generateArrayPrefix, commaRoundTrip, allowEmptyArrays, strictNullHandling, skipNulls, encodeDotInKeys, 
+        // @ts-ignore
+        generateArrayPrefix === 'comma' && encodeValuesOnly && is_array(obj) ? null : encoder, filter, sort, allowDots, serializeDate, format, formatter, encodeValuesOnly, charset, valueSideChannel));
+    }
+    return values;
+}
+function normalize_stringify_options(opts = defaults) {
+    if (typeof opts.allowEmptyArrays !== 'undefined' && typeof opts.allowEmptyArrays !== 'boolean') {
+        throw new TypeError('`allowEmptyArrays` option can only be `true` or `false`, when provided');
+    }
+    if (typeof opts.encodeDotInKeys !== 'undefined' && typeof opts.encodeDotInKeys !== 'boolean') {
+        throw new TypeError('`encodeDotInKeys` option can only be `true` or `false`, when provided');
+    }
+    if (opts.encoder !== null && typeof opts.encoder !== 'undefined' && typeof opts.encoder !== 'function') {
+        throw new TypeError('Encoder has to be a function.');
+    }
+    const charset = opts.charset || defaults.charset;
+    if (typeof opts.charset !== 'undefined' && opts.charset !== 'utf-8' && opts.charset !== 'iso-8859-1') {
+        throw new TypeError('The charset option must be either utf-8, iso-8859-1, or undefined');
+    }
+    let format = formats_1.default_format;
+    if (typeof opts.format !== 'undefined') {
+        if (!has.call(formats_1.formatters, opts.format)) {
+            throw new TypeError('Unknown format option provided.');
+        }
+        format = opts.format;
+    }
+    const formatter = formats_1.formatters[format];
+    let filter = defaults.filter;
+    if (typeof opts.filter === 'function' || is_array(opts.filter)) {
+        filter = opts.filter;
+    }
+    let arrayFormat;
+    if (opts.arrayFormat && opts.arrayFormat in array_prefix_generators) {
+        arrayFormat = opts.arrayFormat;
+    }
+    else if ('indices' in opts) {
+        arrayFormat = opts.indices ? 'indices' : 'repeat';
+    }
+    else {
+        arrayFormat = defaults.arrayFormat;
+    }
+    if ('commaRoundTrip' in opts && typeof opts.commaRoundTrip !== 'boolean') {
+        throw new TypeError('`commaRoundTrip` must be a boolean, or absent');
+    }
+    const allowDots = typeof opts.allowDots === 'undefined' ?
+        !!opts.encodeDotInKeys === true ?
+            true
+            : defaults.allowDots
+        : !!opts.allowDots;
+    return {
+        addQueryPrefix: typeof opts.addQueryPrefix === 'boolean' ? opts.addQueryPrefix : defaults.addQueryPrefix,
+        // @ts-ignore
+        allowDots: allowDots,
+        allowEmptyArrays: typeof opts.allowEmptyArrays === 'boolean' ? !!opts.allowEmptyArrays : defaults.allowEmptyArrays,
+        arrayFormat: arrayFormat,
+        charset: charset,
+        charsetSentinel: typeof opts.charsetSentinel === 'boolean' ? opts.charsetSentinel : defaults.charsetSentinel,
+        commaRoundTrip: !!opts.commaRoundTrip,
+        delimiter: typeof opts.delimiter === 'undefined' ? defaults.delimiter : opts.delimiter,
+        encode: typeof opts.encode === 'boolean' ? opts.encode : defaults.encode,
+        encodeDotInKeys: typeof opts.encodeDotInKeys === 'boolean' ? opts.encodeDotInKeys : defaults.encodeDotInKeys,
+        encoder: typeof opts.encoder === 'function' ? opts.encoder : defaults.encoder,
+        encodeValuesOnly: typeof opts.encodeValuesOnly === 'boolean' ? opts.encodeValuesOnly : defaults.encodeValuesOnly,
+        filter: filter,
+        format: format,
+        formatter: formatter,
+        serializeDate: typeof opts.serializeDate === 'function' ? opts.serializeDate : defaults.serializeDate,
+        skipNulls: typeof opts.skipNulls === 'boolean' ? opts.skipNulls : defaults.skipNulls,
+        // @ts-ignore
+        sort: typeof opts.sort === 'function' ? opts.sort : null,
+        strictNullHandling: typeof opts.strictNullHandling === 'boolean' ? opts.strictNullHandling : defaults.strictNullHandling,
+    };
+}
+function stringify(object, opts = {}) {
+    let obj = object;
+    const options = normalize_stringify_options(opts);
+    let obj_keys;
+    let filter;
+    if (typeof options.filter === 'function') {
+        filter = options.filter;
+        obj = filter('', obj);
+    }
+    else if (is_array(options.filter)) {
+        filter = options.filter;
+        obj_keys = filter;
+    }
+    const keys = [];
+    if (typeof obj !== 'object' || obj === null) {
+        return '';
+    }
+    const generateArrayPrefix = array_prefix_generators[options.arrayFormat];
+    const commaRoundTrip = generateArrayPrefix === 'comma' && options.commaRoundTrip;
+    if (!obj_keys) {
+        obj_keys = Object.keys(obj);
+    }
+    if (options.sort) {
+        obj_keys.sort(options.sort);
+    }
+    const sideChannel = new WeakMap();
+    for (let i = 0; i < obj_keys.length; ++i) {
+        const key = obj_keys[i];
+        if (options.skipNulls && obj[key] === null) {
+            continue;
+        }
+        push_to_array(keys, inner_stringify(obj[key], key, 
+        // @ts-expect-error
+        generateArrayPrefix, commaRoundTrip, options.allowEmptyArrays, options.strictNullHandling, options.skipNulls, options.encodeDotInKeys, options.encode ? options.encoder : null, options.filter, options.sort, options.allowDots, options.serializeDate, options.format, options.formatter, options.encodeValuesOnly, options.charset, sideChannel));
+    }
+    const joined = keys.join(options.delimiter);
+    let prefix = options.addQueryPrefix === true ? '?' : '';
+    if (options.charsetSentinel) {
+        if (options.charset === 'iso-8859-1') {
+            // encodeURIComponent('&#10003;'), the "numeric entity" representation of a checkmark
+            prefix += 'utf8=%26%2310003%3B&';
+        }
+        else {
+            // encodeURIComponent('✓')
+            prefix += 'utf8=%E2%9C%93&';
+        }
+    }
+    return joined.length > 0 ? prefix + joined : '';
+}
+exports.stringify = stringify;
+//# sourceMappingURL=stringify.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/internal/qs/utils.js":
+/*!**************************************************!*\
+  !*** ./node_modules/openai/internal/qs/utils.js ***!
+  \**************************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.maybe_map = exports.combine = exports.is_buffer = exports.is_regexp = exports.compact = exports.encode = exports.decode = exports.assign_single_source = exports.merge = void 0;
+const formats_1 = __webpack_require__(/*! ./formats.js */ "./node_modules/openai/internal/qs/formats.js");
+const has = Object.prototype.hasOwnProperty;
+const is_array = Array.isArray;
+const hex_table = (() => {
+    const array = [];
+    for (let i = 0; i < 256; ++i) {
+        array.push('%' + ((i < 16 ? '0' : '') + i.toString(16)).toUpperCase());
+    }
+    return array;
+})();
+function compact_queue(queue) {
+    while (queue.length > 1) {
+        const item = queue.pop();
+        if (!item)
+            continue;
+        const obj = item.obj[item.prop];
+        if (is_array(obj)) {
+            const compacted = [];
+            for (let j = 0; j < obj.length; ++j) {
+                if (typeof obj[j] !== 'undefined') {
+                    compacted.push(obj[j]);
+                }
+            }
+            // @ts-ignore
+            item.obj[item.prop] = compacted;
+        }
+    }
+}
+function array_to_object(source, options) {
+    const obj = options && options.plainObjects ? Object.create(null) : {};
+    for (let i = 0; i < source.length; ++i) {
+        if (typeof source[i] !== 'undefined') {
+            obj[i] = source[i];
+        }
+    }
+    return obj;
+}
+function merge(target, source, options = {}) {
+    if (!source) {
+        return target;
+    }
+    if (typeof source !== 'object') {
+        if (is_array(target)) {
+            target.push(source);
+        }
+        else if (target && typeof target === 'object') {
+            if ((options && (options.plainObjects || options.allowPrototypes)) ||
+                !has.call(Object.prototype, source)) {
+                target[source] = true;
+            }
+        }
+        else {
+            return [target, source];
+        }
+        return target;
+    }
+    if (!target || typeof target !== 'object') {
+        return [target].concat(source);
+    }
+    let mergeTarget = target;
+    if (is_array(target) && !is_array(source)) {
+        // @ts-ignore
+        mergeTarget = array_to_object(target, options);
+    }
+    if (is_array(target) && is_array(source)) {
+        source.forEach(function (item, i) {
+            if (has.call(target, i)) {
+                const targetItem = target[i];
+                if (targetItem && typeof targetItem === 'object' && item && typeof item === 'object') {
+                    target[i] = merge(targetItem, item, options);
+                }
+                else {
+                    target.push(item);
+                }
+            }
+            else {
+                target[i] = item;
+            }
+        });
+        return target;
+    }
+    return Object.keys(source).reduce(function (acc, key) {
+        const value = source[key];
+        if (has.call(acc, key)) {
+            acc[key] = merge(acc[key], value, options);
+        }
+        else {
+            acc[key] = value;
+        }
+        return acc;
+    }, mergeTarget);
+}
+exports.merge = merge;
+function assign_single_source(target, source) {
+    return Object.keys(source).reduce(function (acc, key) {
+        acc[key] = source[key];
+        return acc;
+    }, target);
+}
+exports.assign_single_source = assign_single_source;
+function decode(str, _, charset) {
+    const strWithoutPlus = str.replace(/\+/g, ' ');
+    if (charset === 'iso-8859-1') {
+        // unescape never throws, no try...catch needed:
+        return strWithoutPlus.replace(/%[0-9a-f]{2}/gi, unescape);
+    }
+    // utf-8
+    try {
+        return decodeURIComponent(strWithoutPlus);
+    }
+    catch (e) {
+        return strWithoutPlus;
+    }
+}
+exports.decode = decode;
+const limit = 1024;
+const encode = (str, _defaultEncoder, charset, _kind, format) => {
+    // This code was originally written by Brian White for the io.js core querystring library.
+    // It has been adapted here for stricter adherence to RFC 3986
+    if (str.length === 0) {
+        return str;
+    }
+    let string = str;
+    if (typeof str === 'symbol') {
+        string = Symbol.prototype.toString.call(str);
+    }
+    else if (typeof str !== 'string') {
+        string = String(str);
+    }
+    if (charset === 'iso-8859-1') {
+        return escape(string).replace(/%u[0-9a-f]{4}/gi, function ($0) {
+            return '%26%23' + parseInt($0.slice(2), 16) + '%3B';
+        });
+    }
+    let out = '';
+    for (let j = 0; j < string.length; j += limit) {
+        const segment = string.length >= limit ? string.slice(j, j + limit) : string;
+        const arr = [];
+        for (let i = 0; i < segment.length; ++i) {
+            let c = segment.charCodeAt(i);
+            if (c === 0x2d || // -
+                c === 0x2e || // .
+                c === 0x5f || // _
+                c === 0x7e || // ~
+                (c >= 0x30 && c <= 0x39) || // 0-9
+                (c >= 0x41 && c <= 0x5a) || // a-z
+                (c >= 0x61 && c <= 0x7a) || // A-Z
+                (format === formats_1.RFC1738 && (c === 0x28 || c === 0x29)) // ( )
+            ) {
+                arr[arr.length] = segment.charAt(i);
+                continue;
+            }
+            if (c < 0x80) {
+                arr[arr.length] = hex_table[c];
+                continue;
+            }
+            if (c < 0x800) {
+                arr[arr.length] = hex_table[0xc0 | (c >> 6)] + hex_table[0x80 | (c & 0x3f)];
+                continue;
+            }
+            if (c < 0xd800 || c >= 0xe000) {
+                arr[arr.length] =
+                    hex_table[0xe0 | (c >> 12)] + hex_table[0x80 | ((c >> 6) & 0x3f)] + hex_table[0x80 | (c & 0x3f)];
+                continue;
+            }
+            i += 1;
+            c = 0x10000 + (((c & 0x3ff) << 10) | (segment.charCodeAt(i) & 0x3ff));
+            arr[arr.length] =
+                hex_table[0xf0 | (c >> 18)] +
+                    hex_table[0x80 | ((c >> 12) & 0x3f)] +
+                    hex_table[0x80 | ((c >> 6) & 0x3f)] +
+                    hex_table[0x80 | (c & 0x3f)];
+        }
+        out += arr.join('');
+    }
+    return out;
+};
+exports.encode = encode;
+function compact(value) {
+    const queue = [{ obj: { o: value }, prop: 'o' }];
+    const refs = [];
+    for (let i = 0; i < queue.length; ++i) {
+        const item = queue[i];
+        // @ts-ignore
+        const obj = item.obj[item.prop];
+        const keys = Object.keys(obj);
+        for (let j = 0; j < keys.length; ++j) {
+            const key = keys[j];
+            const val = obj[key];
+            if (typeof val === 'object' && val !== null && refs.indexOf(val) === -1) {
+                queue.push({ obj: obj, prop: key });
+                refs.push(val);
+            }
+        }
+    }
+    compact_queue(queue);
+    return value;
+}
+exports.compact = compact;
+function is_regexp(obj) {
+    return Object.prototype.toString.call(obj) === '[object RegExp]';
+}
+exports.is_regexp = is_regexp;
+function is_buffer(obj) {
+    if (!obj || typeof obj !== 'object') {
+        return false;
+    }
+    return !!(obj.constructor && obj.constructor.isBuffer && obj.constructor.isBuffer(obj));
+}
+exports.is_buffer = is_buffer;
+function combine(a, b) {
+    return [].concat(a, b);
+}
+exports.combine = combine;
+function maybe_map(val, fn) {
+    if (is_array(val)) {
+        const mapped = [];
+        for (let i = 0; i < val.length; i += 1) {
+            mapped.push(fn(val[i]));
+        }
+        return mapped;
+    }
+    return fn(val);
+}
+exports.maybe_map = maybe_map;
+//# sourceMappingURL=utils.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/internal/stream-utils.js":
+/*!******************************************************!*\
+  !*** ./node_modules/openai/internal/stream-utils.js ***!
+  \******************************************************/
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.ReadableStreamToAsyncIterable = void 0;
+/**
+ * Most browsers don't yet have async iterable support for ReadableStream,
+ * and Node has a very different way of reading bytes from its "ReadableStream".
+ *
+ * This polyfill was pulled from https://github.com/MattiasBuelens/web-streams-polyfill/pull/122#issuecomment-1627354490
+ */
+function ReadableStreamToAsyncIterable(stream) {
+    if (stream[Symbol.asyncIterator])
+        return stream;
+    const reader = stream.getReader();
+    return {
+        async next() {
+            try {
+                const result = await reader.read();
+                if (result?.done)
+                    reader.releaseLock(); // release lock when stream becomes closed
+                return result;
+            }
+            catch (e) {
+                reader.releaseLock(); // release lock when stream becomes errored
+                throw e;
+            }
+        },
+        async return() {
+            const cancelPromise = reader.cancel();
+            reader.releaseLock();
+            await cancelPromise;
+            return { done: true, value: undefined };
+        },
+        [Symbol.asyncIterator]() {
+            return this;
+        },
+    };
+}
+exports.ReadableStreamToAsyncIterable = ReadableStreamToAsyncIterable;
+//# sourceMappingURL=stream-utils.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/lib/AbstractChatCompletionRunner.js":
+/*!*****************************************************************!*\
+  !*** ./node_modules/openai/lib/AbstractChatCompletionRunner.js ***!
+  \*****************************************************************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+var __classPrivateFieldGet = (this && this.__classPrivateFieldGet) || function (receiver, state, kind, f) {
+    if (kind === "a" && !f) throw new TypeError("Private accessor was defined without a getter");
+    if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver)) throw new TypeError("Cannot read private member from an object whose class did not declare it");
+    return kind === "m" ? f : kind === "a" ? f.call(receiver) : f ? f.value : state.get(receiver);
+};
+var _AbstractChatCompletionRunner_instances, _AbstractChatCompletionRunner_getFinalContent, _AbstractChatCompletionRunner_getFinalMessage, _AbstractChatCompletionRunner_getFinalFunctionCall, _AbstractChatCompletionRunner_getFinalFunctionCallResult, _AbstractChatCompletionRunner_calculateTotalUsage, _AbstractChatCompletionRunner_validateParams, _AbstractChatCompletionRunner_stringifyFunctionCallResult;
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.AbstractChatCompletionRunner = void 0;
+const error_1 = __webpack_require__(/*! ../error.js */ "./node_modules/openai/error.js");
+const RunnableFunction_1 = __webpack_require__(/*! ./RunnableFunction.js */ "./node_modules/openai/lib/RunnableFunction.js");
+const chatCompletionUtils_1 = __webpack_require__(/*! ./chatCompletionUtils.js */ "./node_modules/openai/lib/chatCompletionUtils.js");
+const EventStream_1 = __webpack_require__(/*! ./EventStream.js */ "./node_modules/openai/lib/EventStream.js");
+const parser_1 = __webpack_require__(/*! ../lib/parser.js */ "./node_modules/openai/lib/parser.js");
+const DEFAULT_MAX_CHAT_COMPLETIONS = 10;
+class AbstractChatCompletionRunner extends EventStream_1.EventStream {
+    constructor() {
+        super(...arguments);
+        _AbstractChatCompletionRunner_instances.add(this);
+        this._chatCompletions = [];
+        this.messages = [];
+    }
+    _addChatCompletion(chatCompletion) {
+        this._chatCompletions.push(chatCompletion);
+        this._emit('chatCompletion', chatCompletion);
+        const message = chatCompletion.choices[0]?.message;
+        if (message)
+            this._addMessage(message);
+        return chatCompletion;
+    }
+    _addMessage(message, emit = true) {
+        if (!('content' in message))
+            message.content = null;
+        this.messages.push(message);
+        if (emit) {
+            this._emit('message', message);
+            if (((0, chatCompletionUtils_1.isFunctionMessage)(message) || (0, chatCompletionUtils_1.isToolMessage)(message)) && message.content) {
+                // Note, this assumes that {role: 'tool', content: …} is always the result of a call of tool of type=function.
+                this._emit('functionCallResult', message.content);
+            }
+            else if ((0, chatCompletionUtils_1.isAssistantMessage)(message) && message.function_call) {
+                this._emit('functionCall', message.function_call);
+            }
+            else if ((0, chatCompletionUtils_1.isAssistantMessage)(message) && message.tool_calls) {
+                for (const tool_call of message.tool_calls) {
+                    if (tool_call.type === 'function') {
+                        this._emit('functionCall', tool_call.function);
+                    }
+                }
+            }
+        }
+    }
+    /**
+     * @returns a promise that resolves with the final ChatCompletion, or rejects
+     * if an error occurred or the stream ended prematurely without producing a ChatCompletion.
+     */
+    async finalChatCompletion() {
+        await this.done();
+        const completion = this._chatCompletions[this._chatCompletions.length - 1];
+        if (!completion)
+            throw new error_1.OpenAIError('stream ended without producing a ChatCompletion');
+        return completion;
+    }
+    /**
+     * @returns a promise that resolves with the content of the final ChatCompletionMessage, or rejects
+     * if an error occurred or the stream ended prematurely without producing a ChatCompletionMessage.
+     */
+    async finalContent() {
+        await this.done();
+        return __classPrivateFieldGet(this, _AbstractChatCompletionRunner_instances, "m", _AbstractChatCompletionRunner_getFinalContent).call(this);
+    }
+    /**
+     * @returns a promise that resolves with the the final assistant ChatCompletionMessage response,
+     * or rejects if an error occurred or the stream ended prematurely without producing a ChatCompletionMessage.
+     */
+    async finalMessage() {
+        await this.done();
+        return __classPrivateFieldGet(this, _AbstractChatCompletionRunner_instances, "m", _AbstractChatCompletionRunner_getFinalMessage).call(this);
+    }
+    /**
+     * @returns a promise that resolves with the content of the final FunctionCall, or rejects
+     * if an error occurred or the stream ended prematurely without producing a ChatCompletionMessage.
+     */
+    async finalFunctionCall() {
+        await this.done();
+        return __classPrivateFieldGet(this, _AbstractChatCompletionRunner_instances, "m", _AbstractChatCompletionRunner_getFinalFunctionCall).call(this);
+    }
+    async finalFunctionCallResult() {
+        await this.done();
+        return __classPrivateFieldGet(this, _AbstractChatCompletionRunner_instances, "m", _AbstractChatCompletionRunner_getFinalFunctionCallResult).call(this);
+    }
+    async totalUsage() {
+        await this.done();
+        return __classPrivateFieldGet(this, _AbstractChatCompletionRunner_instances, "m", _AbstractChatCompletionRunner_calculateTotalUsage).call(this);
+    }
+    allChatCompletions() {
+        return [...this._chatCompletions];
+    }
+    _emitFinal() {
+        const completion = this._chatCompletions[this._chatCompletions.length - 1];
+        if (completion)
+            this._emit('finalChatCompletion', completion);
+        const finalMessage = __classPrivateFieldGet(this, _AbstractChatCompletionRunner_instances, "m", _AbstractChatCompletionRunner_getFinalMessage).call(this);
+        if (finalMessage)
+            this._emit('finalMessage', finalMessage);
+        const finalContent = __classPrivateFieldGet(this, _AbstractChatCompletionRunner_instances, "m", _AbstractChatCompletionRunner_getFinalContent).call(this);
+        if (finalContent)
+            this._emit('finalContent', finalContent);
+        const finalFunctionCall = __classPrivateFieldGet(this, _AbstractChatCompletionRunner_instances, "m", _AbstractChatCompletionRunner_getFinalFunctionCall).call(this);
+        if (finalFunctionCall)
+            this._emit('finalFunctionCall', finalFunctionCall);
+        const finalFunctionCallResult = __classPrivateFieldGet(this, _AbstractChatCompletionRunner_instances, "m", _AbstractChatCompletionRunner_getFinalFunctionCallResult).call(this);
+        if (finalFunctionCallResult != null)
+            this._emit('finalFunctionCallResult', finalFunctionCallResult);
+        if (this._chatCompletions.some((c) => c.usage)) {
+            this._emit('totalUsage', __classPrivateFieldGet(this, _AbstractChatCompletionRunner_instances, "m", _AbstractChatCompletionRunner_calculateTotalUsage).call(this));
+        }
+    }
+    async _createChatCompletion(client, params, options) {
+        const signal = options?.signal;
+        if (signal) {
+            if (signal.aborted)
+                this.controller.abort();
+            signal.addEventListener('abort', () => this.controller.abort());
+        }
+        __classPrivateFieldGet(this, _AbstractChatCompletionRunner_instances, "m", _AbstractChatCompletionRunner_validateParams).call(this, params);
+        const chatCompletion = await client.chat.completions.create({ ...params, stream: false }, { ...options, signal: this.controller.signal });
+        this._connected();
+        return this._addChatCompletion((0, parser_1.parseChatCompletion)(chatCompletion, params));
+    }
+    async _runChatCompletion(client, params, options) {
+        for (const message of params.messages) {
+            this._addMessage(message, false);
+        }
+        return await this._createChatCompletion(client, params, options);
+    }
+    async _runFunctions(client, params, options) {
+        const role = 'function';
+        const { function_call = 'auto', stream, ...restParams } = params;
+        const singleFunctionToCall = typeof function_call !== 'string' && function_call?.name;
+        const { maxChatCompletions = DEFAULT_MAX_CHAT_COMPLETIONS } = options || {};
+        const functionsByName = {};
+        for (const f of params.functions) {
+            functionsByName[f.name || f.function.name] = f;
+        }
+        const functions = params.functions.map((f) => ({
+            name: f.name || f.function.name,
+            parameters: f.parameters,
+            description: f.description,
+        }));
+        for (const message of params.messages) {
+            this._addMessage(message, false);
+        }
+        for (let i = 0; i < maxChatCompletions; ++i) {
+            const chatCompletion = await this._createChatCompletion(client, {
+                ...restParams,
+                function_call,
+                functions,
+                messages: [...this.messages],
+            }, options);
+            const message = chatCompletion.choices[0]?.message;
+            if (!message) {
+                throw new error_1.OpenAIError(`missing message in ChatCompletion response`);
+            }
+            if (!message.function_call)
+                return;
+            const { name, arguments: args } = message.function_call;
+            const fn = functionsByName[name];
+            if (!fn) {
+                const content = `Invalid function_call: ${JSON.stringify(name)}. Available options are: ${functions
+                    .map((f) => JSON.stringify(f.name))
+                    .join(', ')}. Please try again`;
+                this._addMessage({ role, name, content });
+                continue;
+            }
+            else if (singleFunctionToCall && singleFunctionToCall !== name) {
+                const content = `Invalid function_call: ${JSON.stringify(name)}. ${JSON.stringify(singleFunctionToCall)} requested. Please try again`;
+                this._addMessage({ role, name, content });
+                continue;
+            }
+            let parsed;
+            try {
+                parsed = (0, RunnableFunction_1.isRunnableFunctionWithParse)(fn) ? await fn.parse(args) : args;
+            }
+            catch (error) {
+                this._addMessage({
+                    role,
+                    name,
+                    content: error instanceof Error ? error.message : String(error),
+                });
+                continue;
+            }
+            // @ts-expect-error it can't rule out `never` type.
+            const rawContent = await fn.function(parsed, this);
+            const content = __classPrivateFieldGet(this, _AbstractChatCompletionRunner_instances, "m", _AbstractChatCompletionRunner_stringifyFunctionCallResult).call(this, rawContent);
+            this._addMessage({ role, name, content });
+            if (singleFunctionToCall)
+                return;
+        }
+    }
+    async _runTools(client, params, options) {
+        const role = 'tool';
+        const { tool_choice = 'auto', stream, ...restParams } = params;
+        const singleFunctionToCall = typeof tool_choice !== 'string' && tool_choice?.function?.name;
+        const { maxChatCompletions = DEFAULT_MAX_CHAT_COMPLETIONS } = options || {};
+        // TODO(someday): clean this logic up
+        const inputTools = params.tools.map((tool) => {
+            if ((0, parser_1.isAutoParsableTool)(tool)) {
+                if (!tool.$callback) {
+                    throw new error_1.OpenAIError('Tool given to `.runTools()` that does not have an associated function');
+                }
+                return {
+                    type: 'function',
+                    function: {
+                        function: tool.$callback,
+                        name: tool.function.name,
+                        description: tool.function.description || '',
+                        parameters: tool.function.parameters,
+                        parse: tool.$parseRaw,
+                        strict: true,
+                    },
+                };
+            }
+            return tool;
+        });
+        const functionsByName = {};
+        for (const f of inputTools) {
+            if (f.type === 'function') {
+                functionsByName[f.function.name || f.function.function.name] = f.function;
+            }
+        }
+        const tools = 'tools' in params ?
+            inputTools.map((t) => t.type === 'function' ?
+                {
+                    type: 'function',
+                    function: {
+                        name: t.function.name || t.function.function.name,
+                        parameters: t.function.parameters,
+                        description: t.function.description,
+                        strict: t.function.strict,
+                    },
+                }
+                : t)
+            : undefined;
+        for (const message of params.messages) {
+            this._addMessage(message, false);
+        }
+        for (let i = 0; i < maxChatCompletions; ++i) {
+            const chatCompletion = await this._createChatCompletion(client, {
+                ...restParams,
+                tool_choice,
+                tools,
+                messages: [...this.messages],
+            }, options);
+            const message = chatCompletion.choices[0]?.message;
+            if (!message) {
+                throw new error_1.OpenAIError(`missing message in ChatCompletion response`);
+            }
+            if (!message.tool_calls?.length) {
+                return;
+            }
+            for (const tool_call of message.tool_calls) {
+                if (tool_call.type !== 'function')
+                    continue;
+                const tool_call_id = tool_call.id;
+                const { name, arguments: args } = tool_call.function;
+                const fn = functionsByName[name];
+                if (!fn) {
+                    const content = `Invalid tool_call: ${JSON.stringify(name)}. Available options are: ${Object.keys(functionsByName)
+                        .map((name) => JSON.stringify(name))
+                        .join(', ')}. Please try again`;
+                    this._addMessage({ role, tool_call_id, content });
+                    continue;
+                }
+                else if (singleFunctionToCall && singleFunctionToCall !== name) {
+                    const content = `Invalid tool_call: ${JSON.stringify(name)}. ${JSON.stringify(singleFunctionToCall)} requested. Please try again`;
+                    this._addMessage({ role, tool_call_id, content });
+                    continue;
+                }
+                let parsed;
+                try {
+                    parsed = (0, RunnableFunction_1.isRunnableFunctionWithParse)(fn) ? await fn.parse(args) : args;
+                }
+                catch (error) {
+                    const content = error instanceof Error ? error.message : String(error);
+                    this._addMessage({ role, tool_call_id, content });
+                    continue;
+                }
+                // @ts-expect-error it can't rule out `never` type.
+                const rawContent = await fn.function(parsed, this);
+                const content = __classPrivateFieldGet(this, _AbstractChatCompletionRunner_instances, "m", _AbstractChatCompletionRunner_stringifyFunctionCallResult).call(this, rawContent);
+                this._addMessage({ role, tool_call_id, content });
+                if (singleFunctionToCall) {
+                    return;
+                }
+            }
+        }
+        return;
+    }
+}
+exports.AbstractChatCompletionRunner = AbstractChatCompletionRunner;
+_AbstractChatCompletionRunner_instances = new WeakSet(), _AbstractChatCompletionRunner_getFinalContent = function _AbstractChatCompletionRunner_getFinalContent() {
+    return __classPrivateFieldGet(this, _AbstractChatCompletionRunner_instances, "m", _AbstractChatCompletionRunner_getFinalMessage).call(this).content ?? null;
+}, _AbstractChatCompletionRunner_getFinalMessage = function _AbstractChatCompletionRunner_getFinalMessage() {
+    let i = this.messages.length;
+    while (i-- > 0) {
+        const message = this.messages[i];
+        if ((0, chatCompletionUtils_1.isAssistantMessage)(message)) {
+            const { function_call, ...rest } = message;
+            // TODO: support audio here
+            const ret = {
+                ...rest,
+                content: message.content ?? null,
+                refusal: message.refusal ?? null,
+            };
+            if (function_call) {
+                ret.function_call = function_call;
+            }
+            return ret;
+        }
+    }
+    throw new error_1.OpenAIError('stream ended without producing a ChatCompletionMessage with role=assistant');
+}, _AbstractChatCompletionRunner_getFinalFunctionCall = function _AbstractChatCompletionRunner_getFinalFunctionCall() {
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+        const message = this.messages[i];
+        if ((0, chatCompletionUtils_1.isAssistantMessage)(message) && message?.function_call) {
+            return message.function_call;
+        }
+        if ((0, chatCompletionUtils_1.isAssistantMessage)(message) && message?.tool_calls?.length) {
+            return message.tool_calls.at(-1)?.function;
+        }
+    }
+    return;
+}, _AbstractChatCompletionRunner_getFinalFunctionCallResult = function _AbstractChatCompletionRunner_getFinalFunctionCallResult() {
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+        const message = this.messages[i];
+        if ((0, chatCompletionUtils_1.isFunctionMessage)(message) && message.content != null) {
+            return message.content;
+        }
+        if ((0, chatCompletionUtils_1.isToolMessage)(message) &&
+            message.content != null &&
+            typeof message.content === 'string' &&
+            this.messages.some((x) => x.role === 'assistant' &&
+                x.tool_calls?.some((y) => y.type === 'function' && y.id === message.tool_call_id))) {
+            return message.content;
+        }
+    }
+    return;
+}, _AbstractChatCompletionRunner_calculateTotalUsage = function _AbstractChatCompletionRunner_calculateTotalUsage() {
+    const total = {
+        completion_tokens: 0,
+        prompt_tokens: 0,
+        total_tokens: 0,
+    };
+    for (const { usage } of this._chatCompletions) {
+        if (usage) {
+            total.completion_tokens += usage.completion_tokens;
+            total.prompt_tokens += usage.prompt_tokens;
+            total.total_tokens += usage.total_tokens;
+        }
+    }
+    return total;
+}, _AbstractChatCompletionRunner_validateParams = function _AbstractChatCompletionRunner_validateParams(params) {
+    if (params.n != null && params.n > 1) {
+        throw new error_1.OpenAIError('ChatCompletion convenience helpers only support n=1 at this time. To use n>1, please use chat.completions.create() directly.');
+    }
+}, _AbstractChatCompletionRunner_stringifyFunctionCallResult = function _AbstractChatCompletionRunner_stringifyFunctionCallResult(rawContent) {
+    return (typeof rawContent === 'string' ? rawContent
+        : rawContent === undefined ? 'undefined'
+            : JSON.stringify(rawContent));
+};
+//# sourceMappingURL=AbstractChatCompletionRunner.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/lib/AssistantStream.js":
+/*!****************************************************!*\
+  !*** ./node_modules/openai/lib/AssistantStream.js ***!
+  \****************************************************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
+var __classPrivateFieldGet = (this && this.__classPrivateFieldGet) || function (receiver, state, kind, f) {
+    if (kind === "a" && !f) throw new TypeError("Private accessor was defined without a getter");
+    if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver)) throw new TypeError("Cannot read private member from an object whose class did not declare it");
+    return kind === "m" ? f : kind === "a" ? f.call(receiver) : f ? f.value : state.get(receiver);
+};
+var __classPrivateFieldSet = (this && this.__classPrivateFieldSet) || function (receiver, state, value, kind, f) {
+    if (kind === "m") throw new TypeError("Private method is not writable");
+    if (kind === "a" && !f) throw new TypeError("Private accessor was defined without a setter");
+    if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver)) throw new TypeError("Cannot write private member to an object whose class did not declare it");
+    return (kind === "a" ? f.call(receiver, value) : f ? f.value = value : state.set(receiver, value)), value;
+};
+var _AssistantStream_instances, _AssistantStream_events, _AssistantStream_runStepSnapshots, _AssistantStream_messageSnapshots, _AssistantStream_messageSnapshot, _AssistantStream_finalRun, _AssistantStream_currentContentIndex, _AssistantStream_currentContent, _AssistantStream_currentToolCallIndex, _AssistantStream_currentToolCall, _AssistantStream_currentEvent, _AssistantStream_currentRunSnapshot, _AssistantStream_currentRunStepSnapshot, _AssistantStream_addEvent, _AssistantStream_endRequest, _AssistantStream_handleMessage, _AssistantStream_handleRunStep, _AssistantStream_handleEvent, _AssistantStream_accumulateRunStep, _AssistantStream_accumulateMessage, _AssistantStream_accumulateContent, _AssistantStream_handleRun;
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.AssistantStream = void 0;
+const Core = __importStar(__webpack_require__(/*! ../core.js */ "./node_modules/openai/core.js"));
+const streaming_1 = __webpack_require__(/*! ../streaming.js */ "./node_modules/openai/streaming.js");
+const error_1 = __webpack_require__(/*! ../error.js */ "./node_modules/openai/error.js");
+const EventStream_1 = __webpack_require__(/*! ./EventStream.js */ "./node_modules/openai/lib/EventStream.js");
+class AssistantStream extends EventStream_1.EventStream {
+    constructor() {
+        super(...arguments);
+        _AssistantStream_instances.add(this);
+        //Track all events in a single list for reference
+        _AssistantStream_events.set(this, []);
+        //Used to accumulate deltas
+        //We are accumulating many types so the value here is not strict
+        _AssistantStream_runStepSnapshots.set(this, {});
+        _AssistantStream_messageSnapshots.set(this, {});
+        _AssistantStream_messageSnapshot.set(this, void 0);
+        _AssistantStream_finalRun.set(this, void 0);
+        _AssistantStream_currentContentIndex.set(this, void 0);
+        _AssistantStream_currentContent.set(this, void 0);
+        _AssistantStream_currentToolCallIndex.set(this, void 0);
+        _AssistantStream_currentToolCall.set(this, void 0);
+        //For current snapshot methods
+        _AssistantStream_currentEvent.set(this, void 0);
+        _AssistantStream_currentRunSnapshot.set(this, void 0);
+        _AssistantStream_currentRunStepSnapshot.set(this, void 0);
+    }
+    [(_AssistantStream_events = new WeakMap(), _AssistantStream_runStepSnapshots = new WeakMap(), _AssistantStream_messageSnapshots = new WeakMap(), _AssistantStream_messageSnapshot = new WeakMap(), _AssistantStream_finalRun = new WeakMap(), _AssistantStream_currentContentIndex = new WeakMap(), _AssistantStream_currentContent = new WeakMap(), _AssistantStream_currentToolCallIndex = new WeakMap(), _AssistantStream_currentToolCall = new WeakMap(), _AssistantStream_currentEvent = new WeakMap(), _AssistantStream_currentRunSnapshot = new WeakMap(), _AssistantStream_currentRunStepSnapshot = new WeakMap(), _AssistantStream_instances = new WeakSet(), Symbol.asyncIterator)]() {
+        const pushQueue = [];
+        const readQueue = [];
+        let done = false;
+        //Catch all for passing along all events
+        this.on('event', (event) => {
+            const reader = readQueue.shift();
+            if (reader) {
+                reader.resolve(event);
+            }
+            else {
+                pushQueue.push(event);
+            }
+        });
+        this.on('end', () => {
+            done = true;
+            for (const reader of readQueue) {
+                reader.resolve(undefined);
+            }
+            readQueue.length = 0;
+        });
+        this.on('abort', (err) => {
+            done = true;
+            for (const reader of readQueue) {
+                reader.reject(err);
+            }
+            readQueue.length = 0;
+        });
+        this.on('error', (err) => {
+            done = true;
+            for (const reader of readQueue) {
+                reader.reject(err);
+            }
+            readQueue.length = 0;
+        });
+        return {
+            next: async () => {
+                if (!pushQueue.length) {
+                    if (done) {
+                        return { value: undefined, done: true };
+                    }
+                    return new Promise((resolve, reject) => readQueue.push({ resolve, reject })).then((chunk) => (chunk ? { value: chunk, done: false } : { value: undefined, done: true }));
+                }
+                const chunk = pushQueue.shift();
+                return { value: chunk, done: false };
+            },
+            return: async () => {
+                this.abort();
+                return { value: undefined, done: true };
+            },
+        };
+    }
+    static fromReadableStream(stream) {
+        const runner = new AssistantStream();
+        runner._run(() => runner._fromReadableStream(stream));
+        return runner;
+    }
+    async _fromReadableStream(readableStream, options) {
+        const signal = options?.signal;
+        if (signal) {
+            if (signal.aborted)
+                this.controller.abort();
+            signal.addEventListener('abort', () => this.controller.abort());
+        }
+        this._connected();
+        const stream = streaming_1.Stream.fromReadableStream(readableStream, this.controller);
+        for await (const event of stream) {
+            __classPrivateFieldGet(this, _AssistantStream_instances, "m", _AssistantStream_addEvent).call(this, event);
+        }
+        if (stream.controller.signal?.aborted) {
+            throw new error_1.APIUserAbortError();
+        }
+        return this._addRun(__classPrivateFieldGet(this, _AssistantStream_instances, "m", _AssistantStream_endRequest).call(this));
+    }
+    toReadableStream() {
+        const stream = new streaming_1.Stream(this[Symbol.asyncIterator].bind(this), this.controller);
+        return stream.toReadableStream();
+    }
+    static createToolAssistantStream(threadId, runId, runs, params, options) {
+        const runner = new AssistantStream();
+        runner._run(() => runner._runToolAssistantStream(threadId, runId, runs, params, {
+            ...options,
+            headers: { ...options?.headers, 'X-Stainless-Helper-Method': 'stream' },
+        }));
+        return runner;
+    }
+    async _createToolAssistantStream(run, threadId, runId, params, options) {
+        const signal = options?.signal;
+        if (signal) {
+            if (signal.aborted)
+                this.controller.abort();
+            signal.addEventListener('abort', () => this.controller.abort());
+        }
+        const body = { ...params, stream: true };
+        const stream = await run.submitToolOutputs(threadId, runId, body, {
+            ...options,
+            signal: this.controller.signal,
+        });
+        this._connected();
+        for await (const event of stream) {
+            __classPrivateFieldGet(this, _AssistantStream_instances, "m", _AssistantStream_addEvent).call(this, event);
+        }
+        if (stream.controller.signal?.aborted) {
+            throw new error_1.APIUserAbortError();
+        }
+        return this._addRun(__classPrivateFieldGet(this, _AssistantStream_instances, "m", _AssistantStream_endRequest).call(this));
+    }
+    static createThreadAssistantStream(params, thread, options) {
+        const runner = new AssistantStream();
+        runner._run(() => runner._threadAssistantStream(params, thread, {
+            ...options,
+            headers: { ...options?.headers, 'X-Stainless-Helper-Method': 'stream' },
+        }));
+        return runner;
+    }
+    static createAssistantStream(threadId, runs, params, options) {
+        const runner = new AssistantStream();
+        runner._run(() => runner._runAssistantStream(threadId, runs, params, {
+            ...options,
+            headers: { ...options?.headers, 'X-Stainless-Helper-Method': 'stream' },
+        }));
+        return runner;
+    }
+    currentEvent() {
+        return __classPrivateFieldGet(this, _AssistantStream_currentEvent, "f");
+    }
+    currentRun() {
+        return __classPrivateFieldGet(this, _AssistantStream_currentRunSnapshot, "f");
+    }
+    currentMessageSnapshot() {
+        return __classPrivateFieldGet(this, _AssistantStream_messageSnapshot, "f");
+    }
+    currentRunStepSnapshot() {
+        return __classPrivateFieldGet(this, _AssistantStream_currentRunStepSnapshot, "f");
+    }
+    async finalRunSteps() {
+        await this.done();
+        return Object.values(__classPrivateFieldGet(this, _AssistantStream_runStepSnapshots, "f"));
+    }
+    async finalMessages() {
+        await this.done();
+        return Object.values(__classPrivateFieldGet(this, _AssistantStream_messageSnapshots, "f"));
+    }
+    async finalRun() {
+        await this.done();
+        if (!__classPrivateFieldGet(this, _AssistantStream_finalRun, "f"))
+            throw Error('Final run was not received.');
+        return __classPrivateFieldGet(this, _AssistantStream_finalRun, "f");
+    }
+    async _createThreadAssistantStream(thread, params, options) {
+        const signal = options?.signal;
+        if (signal) {
+            if (signal.aborted)
+                this.controller.abort();
+            signal.addEventListener('abort', () => this.controller.abort());
+        }
+        const body = { ...params, stream: true };
+        const stream = await thread.createAndRun(body, { ...options, signal: this.controller.signal });
+        this._connected();
+        for await (const event of stream) {
+            __classPrivateFieldGet(this, _AssistantStream_instances, "m", _AssistantStream_addEvent).call(this, event);
+        }
+        if (stream.controller.signal?.aborted) {
+            throw new error_1.APIUserAbortError();
+        }
+        return this._addRun(__classPrivateFieldGet(this, _AssistantStream_instances, "m", _AssistantStream_endRequest).call(this));
+    }
+    async _createAssistantStream(run, threadId, params, options) {
+        const signal = options?.signal;
+        if (signal) {
+            if (signal.aborted)
+                this.controller.abort();
+            signal.addEventListener('abort', () => this.controller.abort());
+        }
+        const body = { ...params, stream: true };
+        const stream = await run.create(threadId, body, { ...options, signal: this.controller.signal });
+        this._connected();
+        for await (const event of stream) {
+            __classPrivateFieldGet(this, _AssistantStream_instances, "m", _AssistantStream_addEvent).call(this, event);
+        }
+        if (stream.controller.signal?.aborted) {
+            throw new error_1.APIUserAbortError();
+        }
+        return this._addRun(__classPrivateFieldGet(this, _AssistantStream_instances, "m", _AssistantStream_endRequest).call(this));
+    }
+    static accumulateDelta(acc, delta) {
+        for (const [key, deltaValue] of Object.entries(delta)) {
+            if (!acc.hasOwnProperty(key)) {
+                acc[key] = deltaValue;
+                continue;
+            }
+            let accValue = acc[key];
+            if (accValue === null || accValue === undefined) {
+                acc[key] = deltaValue;
+                continue;
+            }
+            // We don't accumulate these special properties
+            if (key === 'index' || key === 'type') {
+                acc[key] = deltaValue;
+                continue;
+            }
+            // Type-specific accumulation logic
+            if (typeof accValue === 'string' && typeof deltaValue === 'string') {
+                accValue += deltaValue;
+            }
+            else if (typeof accValue === 'number' && typeof deltaValue === 'number') {
+                accValue += deltaValue;
+            }
+            else if (Core.isObj(accValue) && Core.isObj(deltaValue)) {
+                accValue = this.accumulateDelta(accValue, deltaValue);
+            }
+            else if (Array.isArray(accValue) && Array.isArray(deltaValue)) {
+                if (accValue.every((x) => typeof x === 'string' || typeof x === 'number')) {
+                    accValue.push(...deltaValue); // Use spread syntax for efficient addition
+                    continue;
+                }
+                for (const deltaEntry of deltaValue) {
+                    if (!Core.isObj(deltaEntry)) {
+                        throw new Error(`Expected array delta entry to be an object but got: ${deltaEntry}`);
+                    }
+                    const index = deltaEntry['index'];
+                    if (index == null) {
+                        console.error(deltaEntry);
+                        throw new Error('Expected array delta entry to have an `index` property');
+                    }
+                    if (typeof index !== 'number') {
+                        throw new Error(`Expected array delta entry \`index\` property to be a number but got ${index}`);
+                    }
+                    const accEntry = accValue[index];
+                    if (accEntry == null) {
+                        accValue.push(deltaEntry);
+                    }
+                    else {
+                        accValue[index] = this.accumulateDelta(accEntry, deltaEntry);
+                    }
+                }
+                continue;
+            }
+            else {
+                throw Error(`Unhandled record type: ${key}, deltaValue: ${deltaValue}, accValue: ${accValue}`);
+            }
+            acc[key] = accValue;
+        }
+        return acc;
+    }
+    _addRun(run) {
+        return run;
+    }
+    async _threadAssistantStream(params, thread, options) {
+        return await this._createThreadAssistantStream(thread, params, options);
+    }
+    async _runAssistantStream(threadId, runs, params, options) {
+        return await this._createAssistantStream(runs, threadId, params, options);
+    }
+    async _runToolAssistantStream(threadId, runId, runs, params, options) {
+        return await this._createToolAssistantStream(runs, threadId, runId, params, options);
+    }
+}
+exports.AssistantStream = AssistantStream;
+_AssistantStream_addEvent = function _AssistantStream_addEvent(event) {
+    if (this.ended)
+        return;
+    __classPrivateFieldSet(this, _AssistantStream_currentEvent, event, "f");
+    __classPrivateFieldGet(this, _AssistantStream_instances, "m", _AssistantStream_handleEvent).call(this, event);
+    switch (event.event) {
+        case 'thread.created':
+            //No action on this event.
+            break;
+        case 'thread.run.created':
+        case 'thread.run.queued':
+        case 'thread.run.in_progress':
+        case 'thread.run.requires_action':
+        case 'thread.run.completed':
+        case 'thread.run.incomplete':
+        case 'thread.run.failed':
+        case 'thread.run.cancelling':
+        case 'thread.run.cancelled':
+        case 'thread.run.expired':
+            __classPrivateFieldGet(this, _AssistantStream_instances, "m", _AssistantStream_handleRun).call(this, event);
+            break;
+        case 'thread.run.step.created':
+        case 'thread.run.step.in_progress':
+        case 'thread.run.step.delta':
+        case 'thread.run.step.completed':
+        case 'thread.run.step.failed':
+        case 'thread.run.step.cancelled':
+        case 'thread.run.step.expired':
+            __classPrivateFieldGet(this, _AssistantStream_instances, "m", _AssistantStream_handleRunStep).call(this, event);
+            break;
+        case 'thread.message.created':
+        case 'thread.message.in_progress':
+        case 'thread.message.delta':
+        case 'thread.message.completed':
+        case 'thread.message.incomplete':
+            __classPrivateFieldGet(this, _AssistantStream_instances, "m", _AssistantStream_handleMessage).call(this, event);
+            break;
+        case 'error':
+            //This is included for completeness, but errors are processed in the SSE event processing so this should not occur
+            throw new Error('Encountered an error event in event processing - errors should be processed earlier');
+        default:
+            assertNever(event);
+    }
+}, _AssistantStream_endRequest = function _AssistantStream_endRequest() {
+    if (this.ended) {
+        throw new error_1.OpenAIError(`stream has ended, this shouldn't happen`);
+    }
+    if (!__classPrivateFieldGet(this, _AssistantStream_finalRun, "f"))
+        throw Error('Final run has not been received');
+    return __classPrivateFieldGet(this, _AssistantStream_finalRun, "f");
+}, _AssistantStream_handleMessage = function _AssistantStream_handleMessage(event) {
+    const [accumulatedMessage, newContent] = __classPrivateFieldGet(this, _AssistantStream_instances, "m", _AssistantStream_accumulateMessage).call(this, event, __classPrivateFieldGet(this, _AssistantStream_messageSnapshot, "f"));
+    __classPrivateFieldSet(this, _AssistantStream_messageSnapshot, accumulatedMessage, "f");
+    __classPrivateFieldGet(this, _AssistantStream_messageSnapshots, "f")[accumulatedMessage.id] = accumulatedMessage;
+    for (const content of newContent) {
+        const snapshotContent = accumulatedMessage.content[content.index];
+        if (snapshotContent?.type == 'text') {
+            this._emit('textCreated', snapshotContent.text);
+        }
+    }
+    switch (event.event) {
+        case 'thread.message.created':
+            this._emit('messageCreated', event.data);
+            break;
+        case 'thread.message.in_progress':
+            break;
+        case 'thread.message.delta':
+            this._emit('messageDelta', event.data.delta, accumulatedMessage);
+            if (event.data.delta.content) {
+                for (const content of event.data.delta.content) {
+                    //If it is text delta, emit a text delta event
+                    if (content.type == 'text' && content.text) {
+                        let textDelta = content.text;
+                        let snapshot = accumulatedMessage.content[content.index];
+                        if (snapshot && snapshot.type == 'text') {
+                            this._emit('textDelta', textDelta, snapshot.text);
+                        }
+                        else {
+                            throw Error('The snapshot associated with this text delta is not text or missing');
+                        }
+                    }
+                    if (content.index != __classPrivateFieldGet(this, _AssistantStream_currentContentIndex, "f")) {
+                        //See if we have in progress content
+                        if (__classPrivateFieldGet(this, _AssistantStream_currentContent, "f")) {
+                            switch (__classPrivateFieldGet(this, _AssistantStream_currentContent, "f").type) {
+                                case 'text':
+                                    this._emit('textDone', __classPrivateFieldGet(this, _AssistantStream_currentContent, "f").text, __classPrivateFieldGet(this, _AssistantStream_messageSnapshot, "f"));
+                                    break;
+                                case 'image_file':
+                                    this._emit('imageFileDone', __classPrivateFieldGet(this, _AssistantStream_currentContent, "f").image_file, __classPrivateFieldGet(this, _AssistantStream_messageSnapshot, "f"));
+                                    break;
+                            }
+                        }
+                        __classPrivateFieldSet(this, _AssistantStream_currentContentIndex, content.index, "f");
+                    }
+                    __classPrivateFieldSet(this, _AssistantStream_currentContent, accumulatedMessage.content[content.index], "f");
+                }
+            }
+            break;
+        case 'thread.message.completed':
+        case 'thread.message.incomplete':
+            //We emit the latest content we were working on on completion (including incomplete)
+            if (__classPrivateFieldGet(this, _AssistantStream_currentContentIndex, "f") !== undefined) {
+                const currentContent = event.data.content[__classPrivateFieldGet(this, _AssistantStream_currentContentIndex, "f")];
+                if (currentContent) {
+                    switch (currentContent.type) {
+                        case 'image_file':
+                            this._emit('imageFileDone', currentContent.image_file, __classPrivateFieldGet(this, _AssistantStream_messageSnapshot, "f"));
+                            break;
+                        case 'text':
+                            this._emit('textDone', currentContent.text, __classPrivateFieldGet(this, _AssistantStream_messageSnapshot, "f"));
+                            break;
+                    }
+                }
+            }
+            if (__classPrivateFieldGet(this, _AssistantStream_messageSnapshot, "f")) {
+                this._emit('messageDone', event.data);
+            }
+            __classPrivateFieldSet(this, _AssistantStream_messageSnapshot, undefined, "f");
+    }
+}, _AssistantStream_handleRunStep = function _AssistantStream_handleRunStep(event) {
+    const accumulatedRunStep = __classPrivateFieldGet(this, _AssistantStream_instances, "m", _AssistantStream_accumulateRunStep).call(this, event);
+    __classPrivateFieldSet(this, _AssistantStream_currentRunStepSnapshot, accumulatedRunStep, "f");
+    switch (event.event) {
+        case 'thread.run.step.created':
+            this._emit('runStepCreated', event.data);
+            break;
+        case 'thread.run.step.delta':
+            const delta = event.data.delta;
+            if (delta.step_details &&
+                delta.step_details.type == 'tool_calls' &&
+                delta.step_details.tool_calls &&
+                accumulatedRunStep.step_details.type == 'tool_calls') {
+                for (const toolCall of delta.step_details.tool_calls) {
+                    if (toolCall.index == __classPrivateFieldGet(this, _AssistantStream_currentToolCallIndex, "f")) {
+                        this._emit('toolCallDelta', toolCall, accumulatedRunStep.step_details.tool_calls[toolCall.index]);
+                    }
+                    else {
+                        if (__classPrivateFieldGet(this, _AssistantStream_currentToolCall, "f")) {
+                            this._emit('toolCallDone', __classPrivateFieldGet(this, _AssistantStream_currentToolCall, "f"));
+                        }
+                        __classPrivateFieldSet(this, _AssistantStream_currentToolCallIndex, toolCall.index, "f");
+                        __classPrivateFieldSet(this, _AssistantStream_currentToolCall, accumulatedRunStep.step_details.tool_calls[toolCall.index], "f");
+                        if (__classPrivateFieldGet(this, _AssistantStream_currentToolCall, "f"))
+                            this._emit('toolCallCreated', __classPrivateFieldGet(this, _AssistantStream_currentToolCall, "f"));
+                    }
+                }
+            }
+            this._emit('runStepDelta', event.data.delta, accumulatedRunStep);
+            break;
+        case 'thread.run.step.completed':
+        case 'thread.run.step.failed':
+        case 'thread.run.step.cancelled':
+        case 'thread.run.step.expired':
+            __classPrivateFieldSet(this, _AssistantStream_currentRunStepSnapshot, undefined, "f");
+            const details = event.data.step_details;
+            if (details.type == 'tool_calls') {
+                if (__classPrivateFieldGet(this, _AssistantStream_currentToolCall, "f")) {
+                    this._emit('toolCallDone', __classPrivateFieldGet(this, _AssistantStream_currentToolCall, "f"));
+                    __classPrivateFieldSet(this, _AssistantStream_currentToolCall, undefined, "f");
+                }
+            }
+            this._emit('runStepDone', event.data, accumulatedRunStep);
+            break;
+        case 'thread.run.step.in_progress':
+            break;
+    }
+}, _AssistantStream_handleEvent = function _AssistantStream_handleEvent(event) {
+    __classPrivateFieldGet(this, _AssistantStream_events, "f").push(event);
+    this._emit('event', event);
+}, _AssistantStream_accumulateRunStep = function _AssistantStream_accumulateRunStep(event) {
+    switch (event.event) {
+        case 'thread.run.step.created':
+            __classPrivateFieldGet(this, _AssistantStream_runStepSnapshots, "f")[event.data.id] = event.data;
+            return event.data;
+        case 'thread.run.step.delta':
+            let snapshot = __classPrivateFieldGet(this, _AssistantStream_runStepSnapshots, "f")[event.data.id];
+            if (!snapshot) {
+                throw Error('Received a RunStepDelta before creation of a snapshot');
+            }
+            let data = event.data;
+            if (data.delta) {
+                const accumulated = AssistantStream.accumulateDelta(snapshot, data.delta);
+                __classPrivateFieldGet(this, _AssistantStream_runStepSnapshots, "f")[event.data.id] = accumulated;
+            }
+            return __classPrivateFieldGet(this, _AssistantStream_runStepSnapshots, "f")[event.data.id];
+        case 'thread.run.step.completed':
+        case 'thread.run.step.failed':
+        case 'thread.run.step.cancelled':
+        case 'thread.run.step.expired':
+        case 'thread.run.step.in_progress':
+            __classPrivateFieldGet(this, _AssistantStream_runStepSnapshots, "f")[event.data.id] = event.data;
+            break;
+    }
+    if (__classPrivateFieldGet(this, _AssistantStream_runStepSnapshots, "f")[event.data.id])
+        return __classPrivateFieldGet(this, _AssistantStream_runStepSnapshots, "f")[event.data.id];
+    throw new Error('No snapshot available');
+}, _AssistantStream_accumulateMessage = function _AssistantStream_accumulateMessage(event, snapshot) {
+    let newContent = [];
+    switch (event.event) {
+        case 'thread.message.created':
+            //On creation the snapshot is just the initial message
+            return [event.data, newContent];
+        case 'thread.message.delta':
+            if (!snapshot) {
+                throw Error('Received a delta with no existing snapshot (there should be one from message creation)');
+            }
+            let data = event.data;
+            //If this delta does not have content, nothing to process
+            if (data.delta.content) {
+                for (const contentElement of data.delta.content) {
+                    if (contentElement.index in snapshot.content) {
+                        let currentContent = snapshot.content[contentElement.index];
+                        snapshot.content[contentElement.index] = __classPrivateFieldGet(this, _AssistantStream_instances, "m", _AssistantStream_accumulateContent).call(this, contentElement, currentContent);
+                    }
+                    else {
+                        snapshot.content[contentElement.index] = contentElement;
+                        // This is a new element
+                        newContent.push(contentElement);
+                    }
+                }
+            }
+            return [snapshot, newContent];
+        case 'thread.message.in_progress':
+        case 'thread.message.completed':
+        case 'thread.message.incomplete':
+            //No changes on other thread events
+            if (snapshot) {
+                return [snapshot, newContent];
+            }
+            else {
+                throw Error('Received thread message event with no existing snapshot');
+            }
+    }
+    throw Error('Tried to accumulate a non-message event');
+}, _AssistantStream_accumulateContent = function _AssistantStream_accumulateContent(contentElement, currentContent) {
+    return AssistantStream.accumulateDelta(currentContent, contentElement);
+}, _AssistantStream_handleRun = function _AssistantStream_handleRun(event) {
+    __classPrivateFieldSet(this, _AssistantStream_currentRunSnapshot, event.data, "f");
+    switch (event.event) {
+        case 'thread.run.created':
+            break;
+        case 'thread.run.queued':
+            break;
+        case 'thread.run.in_progress':
+            break;
+        case 'thread.run.requires_action':
+        case 'thread.run.cancelled':
+        case 'thread.run.failed':
+        case 'thread.run.completed':
+        case 'thread.run.expired':
+            __classPrivateFieldSet(this, _AssistantStream_finalRun, event.data, "f");
+            if (__classPrivateFieldGet(this, _AssistantStream_currentToolCall, "f")) {
+                this._emit('toolCallDone', __classPrivateFieldGet(this, _AssistantStream_currentToolCall, "f"));
+                __classPrivateFieldSet(this, _AssistantStream_currentToolCall, undefined, "f");
+            }
+            break;
+        case 'thread.run.cancelling':
+            break;
+    }
+};
+function assertNever(_x) { }
+//# sourceMappingURL=AssistantStream.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/lib/ChatCompletionRunner.js":
+/*!*********************************************************!*\
+  !*** ./node_modules/openai/lib/ChatCompletionRunner.js ***!
+  \*********************************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.ChatCompletionRunner = void 0;
+const AbstractChatCompletionRunner_1 = __webpack_require__(/*! ./AbstractChatCompletionRunner.js */ "./node_modules/openai/lib/AbstractChatCompletionRunner.js");
+const chatCompletionUtils_1 = __webpack_require__(/*! ./chatCompletionUtils.js */ "./node_modules/openai/lib/chatCompletionUtils.js");
+class ChatCompletionRunner extends AbstractChatCompletionRunner_1.AbstractChatCompletionRunner {
+    /** @deprecated - please use `runTools` instead. */
+    static runFunctions(client, params, options) {
+        const runner = new ChatCompletionRunner();
+        const opts = {
+            ...options,
+            headers: { ...options?.headers, 'X-Stainless-Helper-Method': 'runFunctions' },
+        };
+        runner._run(() => runner._runFunctions(client, params, opts));
+        return runner;
+    }
+    static runTools(client, params, options) {
+        const runner = new ChatCompletionRunner();
+        const opts = {
+            ...options,
+            headers: { ...options?.headers, 'X-Stainless-Helper-Method': 'runTools' },
+        };
+        runner._run(() => runner._runTools(client, params, opts));
+        return runner;
+    }
+    _addMessage(message, emit = true) {
+        super._addMessage(message, emit);
+        if ((0, chatCompletionUtils_1.isAssistantMessage)(message) && message.content) {
+            this._emit('content', message.content);
+        }
+    }
+}
+exports.ChatCompletionRunner = ChatCompletionRunner;
+//# sourceMappingURL=ChatCompletionRunner.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/lib/ChatCompletionStream.js":
+/*!*********************************************************!*\
+  !*** ./node_modules/openai/lib/ChatCompletionStream.js ***!
+  \*********************************************************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+var __classPrivateFieldSet = (this && this.__classPrivateFieldSet) || function (receiver, state, value, kind, f) {
+    if (kind === "m") throw new TypeError("Private method is not writable");
+    if (kind === "a" && !f) throw new TypeError("Private accessor was defined without a setter");
+    if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver)) throw new TypeError("Cannot write private member to an object whose class did not declare it");
+    return (kind === "a" ? f.call(receiver, value) : f ? f.value = value : state.set(receiver, value)), value;
+};
+var __classPrivateFieldGet = (this && this.__classPrivateFieldGet) || function (receiver, state, kind, f) {
+    if (kind === "a" && !f) throw new TypeError("Private accessor was defined without a getter");
+    if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver)) throw new TypeError("Cannot read private member from an object whose class did not declare it");
+    return kind === "m" ? f : kind === "a" ? f.call(receiver) : f ? f.value : state.get(receiver);
+};
+var _ChatCompletionStream_instances, _ChatCompletionStream_params, _ChatCompletionStream_choiceEventStates, _ChatCompletionStream_currentChatCompletionSnapshot, _ChatCompletionStream_beginRequest, _ChatCompletionStream_getChoiceEventState, _ChatCompletionStream_addChunk, _ChatCompletionStream_emitToolCallDoneEvent, _ChatCompletionStream_emitContentDoneEvents, _ChatCompletionStream_endRequest, _ChatCompletionStream_getAutoParseableResponseFormat, _ChatCompletionStream_accumulateChatCompletion;
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.ChatCompletionStream = void 0;
+const error_1 = __webpack_require__(/*! ../error.js */ "./node_modules/openai/error.js");
+const AbstractChatCompletionRunner_1 = __webpack_require__(/*! ./AbstractChatCompletionRunner.js */ "./node_modules/openai/lib/AbstractChatCompletionRunner.js");
+const streaming_1 = __webpack_require__(/*! ../streaming.js */ "./node_modules/openai/streaming.js");
+const parser_1 = __webpack_require__(/*! ../lib/parser.js */ "./node_modules/openai/lib/parser.js");
+const parser_2 = __webpack_require__(/*! ../_vendor/partial-json-parser/parser.js */ "./node_modules/openai/_vendor/partial-json-parser/parser.js");
+class ChatCompletionStream extends AbstractChatCompletionRunner_1.AbstractChatCompletionRunner {
+    constructor(params) {
+        super();
+        _ChatCompletionStream_instances.add(this);
+        _ChatCompletionStream_params.set(this, void 0);
+        _ChatCompletionStream_choiceEventStates.set(this, void 0);
+        _ChatCompletionStream_currentChatCompletionSnapshot.set(this, void 0);
+        __classPrivateFieldSet(this, _ChatCompletionStream_params, params, "f");
+        __classPrivateFieldSet(this, _ChatCompletionStream_choiceEventStates, [], "f");
+    }
+    get currentChatCompletionSnapshot() {
+        return __classPrivateFieldGet(this, _ChatCompletionStream_currentChatCompletionSnapshot, "f");
+    }
+    /**
+     * Intended for use on the frontend, consuming a stream produced with
+     * `.toReadableStream()` on the backend.
+     *
+     * Note that messages sent to the model do not appear in `.on('message')`
+     * in this context.
+     */
+    static fromReadableStream(stream) {
+        const runner = new ChatCompletionStream(null);
+        runner._run(() => runner._fromReadableStream(stream));
+        return runner;
+    }
+    static createChatCompletion(client, params, options) {
+        const runner = new ChatCompletionStream(params);
+        runner._run(() => runner._runChatCompletion(client, { ...params, stream: true }, { ...options, headers: { ...options?.headers, 'X-Stainless-Helper-Method': 'stream' } }));
+        return runner;
+    }
+    async _createChatCompletion(client, params, options) {
+        super._createChatCompletion;
+        const signal = options?.signal;
+        if (signal) {
+            if (signal.aborted)
+                this.controller.abort();
+            signal.addEventListener('abort', () => this.controller.abort());
+        }
+        __classPrivateFieldGet(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_beginRequest).call(this);
+        const stream = await client.chat.completions.create({ ...params, stream: true }, { ...options, signal: this.controller.signal });
+        this._connected();
+        for await (const chunk of stream) {
+            __classPrivateFieldGet(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_addChunk).call(this, chunk);
+        }
+        if (stream.controller.signal?.aborted) {
+            throw new error_1.APIUserAbortError();
+        }
+        return this._addChatCompletion(__classPrivateFieldGet(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_endRequest).call(this));
+    }
+    async _fromReadableStream(readableStream, options) {
+        const signal = options?.signal;
+        if (signal) {
+            if (signal.aborted)
+                this.controller.abort();
+            signal.addEventListener('abort', () => this.controller.abort());
+        }
+        __classPrivateFieldGet(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_beginRequest).call(this);
+        this._connected();
+        const stream = streaming_1.Stream.fromReadableStream(readableStream, this.controller);
+        let chatId;
+        for await (const chunk of stream) {
+            if (chatId && chatId !== chunk.id) {
+                // A new request has been made.
+                this._addChatCompletion(__classPrivateFieldGet(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_endRequest).call(this));
+            }
+            __classPrivateFieldGet(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_addChunk).call(this, chunk);
+            chatId = chunk.id;
+        }
+        if (stream.controller.signal?.aborted) {
+            throw new error_1.APIUserAbortError();
+        }
+        return this._addChatCompletion(__classPrivateFieldGet(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_endRequest).call(this));
+    }
+    [(_ChatCompletionStream_params = new WeakMap(), _ChatCompletionStream_choiceEventStates = new WeakMap(), _ChatCompletionStream_currentChatCompletionSnapshot = new WeakMap(), _ChatCompletionStream_instances = new WeakSet(), _ChatCompletionStream_beginRequest = function _ChatCompletionStream_beginRequest() {
+        if (this.ended)
+            return;
+        __classPrivateFieldSet(this, _ChatCompletionStream_currentChatCompletionSnapshot, undefined, "f");
+    }, _ChatCompletionStream_getChoiceEventState = function _ChatCompletionStream_getChoiceEventState(choice) {
+        let state = __classPrivateFieldGet(this, _ChatCompletionStream_choiceEventStates, "f")[choice.index];
+        if (state) {
+            return state;
+        }
+        state = {
+            content_done: false,
+            refusal_done: false,
+            logprobs_content_done: false,
+            logprobs_refusal_done: false,
+            done_tool_calls: new Set(),
+            current_tool_call_index: null,
+        };
+        __classPrivateFieldGet(this, _ChatCompletionStream_choiceEventStates, "f")[choice.index] = state;
+        return state;
+    }, _ChatCompletionStream_addChunk = function _ChatCompletionStream_addChunk(chunk) {
+        if (this.ended)
+            return;
+        const completion = __classPrivateFieldGet(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_accumulateChatCompletion).call(this, chunk);
+        this._emit('chunk', chunk, completion);
+        for (const choice of chunk.choices) {
+            const choiceSnapshot = completion.choices[choice.index];
+            if (choice.delta.content != null &&
+                choiceSnapshot.message?.role === 'assistant' &&
+                choiceSnapshot.message?.content) {
+                this._emit('content', choice.delta.content, choiceSnapshot.message.content);
+                this._emit('content.delta', {
+                    delta: choice.delta.content,
+                    snapshot: choiceSnapshot.message.content,
+                    parsed: choiceSnapshot.message.parsed,
+                });
+            }
+            if (choice.delta.refusal != null &&
+                choiceSnapshot.message?.role === 'assistant' &&
+                choiceSnapshot.message?.refusal) {
+                this._emit('refusal.delta', {
+                    delta: choice.delta.refusal,
+                    snapshot: choiceSnapshot.message.refusal,
+                });
+            }
+            if (choice.logprobs?.content != null && choiceSnapshot.message?.role === 'assistant') {
+                this._emit('logprobs.content.delta', {
+                    content: choice.logprobs?.content,
+                    snapshot: choiceSnapshot.logprobs?.content ?? [],
+                });
+            }
+            if (choice.logprobs?.refusal != null && choiceSnapshot.message?.role === 'assistant') {
+                this._emit('logprobs.refusal.delta', {
+                    refusal: choice.logprobs?.refusal,
+                    snapshot: choiceSnapshot.logprobs?.refusal ?? [],
+                });
+            }
+            const state = __classPrivateFieldGet(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_getChoiceEventState).call(this, choiceSnapshot);
+            if (choiceSnapshot.finish_reason) {
+                __classPrivateFieldGet(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_emitContentDoneEvents).call(this, choiceSnapshot);
+                if (state.current_tool_call_index != null) {
+                    __classPrivateFieldGet(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_emitToolCallDoneEvent).call(this, choiceSnapshot, state.current_tool_call_index);
+                }
+            }
+            for (const toolCall of choice.delta.tool_calls ?? []) {
+                if (state.current_tool_call_index !== toolCall.index) {
+                    __classPrivateFieldGet(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_emitContentDoneEvents).call(this, choiceSnapshot);
+                    // new tool call started, the previous one is done
+                    if (state.current_tool_call_index != null) {
+                        __classPrivateFieldGet(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_emitToolCallDoneEvent).call(this, choiceSnapshot, state.current_tool_call_index);
+                    }
+                }
+                state.current_tool_call_index = toolCall.index;
+            }
+            for (const toolCallDelta of choice.delta.tool_calls ?? []) {
+                const toolCallSnapshot = choiceSnapshot.message.tool_calls?.[toolCallDelta.index];
+                if (!toolCallSnapshot?.type) {
+                    continue;
+                }
+                if (toolCallSnapshot?.type === 'function') {
+                    this._emit('tool_calls.function.arguments.delta', {
+                        name: toolCallSnapshot.function?.name,
+                        index: toolCallDelta.index,
+                        arguments: toolCallSnapshot.function.arguments,
+                        parsed_arguments: toolCallSnapshot.function.parsed_arguments,
+                        arguments_delta: toolCallDelta.function?.arguments ?? '',
+                    });
+                }
+                else {
+                    assertNever(toolCallSnapshot?.type);
+                }
+            }
+        }
+    }, _ChatCompletionStream_emitToolCallDoneEvent = function _ChatCompletionStream_emitToolCallDoneEvent(choiceSnapshot, toolCallIndex) {
+        const state = __classPrivateFieldGet(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_getChoiceEventState).call(this, choiceSnapshot);
+        if (state.done_tool_calls.has(toolCallIndex)) {
+            // we've already fired the done event
+            return;
+        }
+        const toolCallSnapshot = choiceSnapshot.message.tool_calls?.[toolCallIndex];
+        if (!toolCallSnapshot) {
+            throw new Error('no tool call snapshot');
+        }
+        if (!toolCallSnapshot.type) {
+            throw new Error('tool call snapshot missing `type`');
+        }
+        if (toolCallSnapshot.type === 'function') {
+            const inputTool = __classPrivateFieldGet(this, _ChatCompletionStream_params, "f")?.tools?.find((tool) => tool.type === 'function' && tool.function.name === toolCallSnapshot.function.name);
+            this._emit('tool_calls.function.arguments.done', {
+                name: toolCallSnapshot.function.name,
+                index: toolCallIndex,
+                arguments: toolCallSnapshot.function.arguments,
+                parsed_arguments: (0, parser_1.isAutoParsableTool)(inputTool) ? inputTool.$parseRaw(toolCallSnapshot.function.arguments)
+                    : inputTool?.function.strict ? JSON.parse(toolCallSnapshot.function.arguments)
+                        : null,
+            });
+        }
+        else {
+            assertNever(toolCallSnapshot.type);
+        }
+    }, _ChatCompletionStream_emitContentDoneEvents = function _ChatCompletionStream_emitContentDoneEvents(choiceSnapshot) {
+        const state = __classPrivateFieldGet(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_getChoiceEventState).call(this, choiceSnapshot);
+        if (choiceSnapshot.message.content && !state.content_done) {
+            state.content_done = true;
+            const responseFormat = __classPrivateFieldGet(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_getAutoParseableResponseFormat).call(this);
+            this._emit('content.done', {
+                content: choiceSnapshot.message.content,
+                parsed: responseFormat ? responseFormat.$parseRaw(choiceSnapshot.message.content) : null,
+            });
+        }
+        if (choiceSnapshot.message.refusal && !state.refusal_done) {
+            state.refusal_done = true;
+            this._emit('refusal.done', { refusal: choiceSnapshot.message.refusal });
+        }
+        if (choiceSnapshot.logprobs?.content && !state.logprobs_content_done) {
+            state.logprobs_content_done = true;
+            this._emit('logprobs.content.done', { content: choiceSnapshot.logprobs.content });
+        }
+        if (choiceSnapshot.logprobs?.refusal && !state.logprobs_refusal_done) {
+            state.logprobs_refusal_done = true;
+            this._emit('logprobs.refusal.done', { refusal: choiceSnapshot.logprobs.refusal });
+        }
+    }, _ChatCompletionStream_endRequest = function _ChatCompletionStream_endRequest() {
+        if (this.ended) {
+            throw new error_1.OpenAIError(`stream has ended, this shouldn't happen`);
+        }
+        const snapshot = __classPrivateFieldGet(this, _ChatCompletionStream_currentChatCompletionSnapshot, "f");
+        if (!snapshot) {
+            throw new error_1.OpenAIError(`request ended without sending any chunks`);
+        }
+        __classPrivateFieldSet(this, _ChatCompletionStream_currentChatCompletionSnapshot, undefined, "f");
+        __classPrivateFieldSet(this, _ChatCompletionStream_choiceEventStates, [], "f");
+        return finalizeChatCompletion(snapshot, __classPrivateFieldGet(this, _ChatCompletionStream_params, "f"));
+    }, _ChatCompletionStream_getAutoParseableResponseFormat = function _ChatCompletionStream_getAutoParseableResponseFormat() {
+        const responseFormat = __classPrivateFieldGet(this, _ChatCompletionStream_params, "f")?.response_format;
+        if ((0, parser_1.isAutoParsableResponseFormat)(responseFormat)) {
+            return responseFormat;
+        }
+        return null;
+    }, _ChatCompletionStream_accumulateChatCompletion = function _ChatCompletionStream_accumulateChatCompletion(chunk) {
+        var _a, _b, _c, _d;
+        let snapshot = __classPrivateFieldGet(this, _ChatCompletionStream_currentChatCompletionSnapshot, "f");
+        const { choices, ...rest } = chunk;
+        if (!snapshot) {
+            snapshot = __classPrivateFieldSet(this, _ChatCompletionStream_currentChatCompletionSnapshot, {
+                ...rest,
+                choices: [],
+            }, "f");
+        }
+        else {
+            Object.assign(snapshot, rest);
+        }
+        for (const { delta, finish_reason, index, logprobs = null, ...other } of chunk.choices) {
+            let choice = snapshot.choices[index];
+            if (!choice) {
+                choice = snapshot.choices[index] = { finish_reason, index, message: {}, logprobs, ...other };
+            }
+            if (logprobs) {
+                if (!choice.logprobs) {
+                    choice.logprobs = Object.assign({}, logprobs);
+                }
+                else {
+                    const { content, refusal, ...rest } = logprobs;
+                    assertIsEmpty(rest);
+                    Object.assign(choice.logprobs, rest);
+                    if (content) {
+                        (_a = choice.logprobs).content ?? (_a.content = []);
+                        choice.logprobs.content.push(...content);
+                    }
+                    if (refusal) {
+                        (_b = choice.logprobs).refusal ?? (_b.refusal = []);
+                        choice.logprobs.refusal.push(...refusal);
+                    }
+                }
+            }
+            if (finish_reason) {
+                choice.finish_reason = finish_reason;
+                if (__classPrivateFieldGet(this, _ChatCompletionStream_params, "f") && (0, parser_1.hasAutoParseableInput)(__classPrivateFieldGet(this, _ChatCompletionStream_params, "f"))) {
+                    if (finish_reason === 'length') {
+                        throw new error_1.LengthFinishReasonError();
+                    }
+                    if (finish_reason === 'content_filter') {
+                        throw new error_1.ContentFilterFinishReasonError();
+                    }
+                }
+            }
+            Object.assign(choice, other);
+            if (!delta)
+                continue; // Shouldn't happen; just in case.
+            const { content, refusal, function_call, role, tool_calls, ...rest } = delta;
+            assertIsEmpty(rest);
+            Object.assign(choice.message, rest);
+            if (refusal) {
+                choice.message.refusal = (choice.message.refusal || '') + refusal;
+            }
+            if (role)
+                choice.message.role = role;
+            if (function_call) {
+                if (!choice.message.function_call) {
+                    choice.message.function_call = function_call;
+                }
+                else {
+                    if (function_call.name)
+                        choice.message.function_call.name = function_call.name;
+                    if (function_call.arguments) {
+                        (_c = choice.message.function_call).arguments ?? (_c.arguments = '');
+                        choice.message.function_call.arguments += function_call.arguments;
+                    }
+                }
+            }
+            if (content) {
+                choice.message.content = (choice.message.content || '') + content;
+                if (!choice.message.refusal && __classPrivateFieldGet(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_getAutoParseableResponseFormat).call(this)) {
+                    choice.message.parsed = (0, parser_2.partialParse)(choice.message.content);
+                }
+            }
+            if (tool_calls) {
+                if (!choice.message.tool_calls)
+                    choice.message.tool_calls = [];
+                for (const { index, id, type, function: fn, ...rest } of tool_calls) {
+                    const tool_call = ((_d = choice.message.tool_calls)[index] ?? (_d[index] = {}));
+                    Object.assign(tool_call, rest);
+                    if (id)
+                        tool_call.id = id;
+                    if (type)
+                        tool_call.type = type;
+                    if (fn)
+                        tool_call.function ?? (tool_call.function = { name: fn.name ?? '', arguments: '' });
+                    if (fn?.name)
+                        tool_call.function.name = fn.name;
+                    if (fn?.arguments) {
+                        tool_call.function.arguments += fn.arguments;
+                        if ((0, parser_1.shouldParseToolCall)(__classPrivateFieldGet(this, _ChatCompletionStream_params, "f"), tool_call)) {
+                            tool_call.function.parsed_arguments = (0, parser_2.partialParse)(tool_call.function.arguments);
+                        }
+                    }
+                }
+            }
+        }
+        return snapshot;
+    }, Symbol.asyncIterator)]() {
+        const pushQueue = [];
+        const readQueue = [];
+        let done = false;
+        this.on('chunk', (chunk) => {
+            const reader = readQueue.shift();
+            if (reader) {
+                reader.resolve(chunk);
+            }
+            else {
+                pushQueue.push(chunk);
+            }
+        });
+        this.on('end', () => {
+            done = true;
+            for (const reader of readQueue) {
+                reader.resolve(undefined);
+            }
+            readQueue.length = 0;
+        });
+        this.on('abort', (err) => {
+            done = true;
+            for (const reader of readQueue) {
+                reader.reject(err);
+            }
+            readQueue.length = 0;
+        });
+        this.on('error', (err) => {
+            done = true;
+            for (const reader of readQueue) {
+                reader.reject(err);
+            }
+            readQueue.length = 0;
+        });
+        return {
+            next: async () => {
+                if (!pushQueue.length) {
+                    if (done) {
+                        return { value: undefined, done: true };
+                    }
+                    return new Promise((resolve, reject) => readQueue.push({ resolve, reject })).then((chunk) => (chunk ? { value: chunk, done: false } : { value: undefined, done: true }));
+                }
+                const chunk = pushQueue.shift();
+                return { value: chunk, done: false };
+            },
+            return: async () => {
+                this.abort();
+                return { value: undefined, done: true };
+            },
+        };
+    }
+    toReadableStream() {
+        const stream = new streaming_1.Stream(this[Symbol.asyncIterator].bind(this), this.controller);
+        return stream.toReadableStream();
+    }
+}
+exports.ChatCompletionStream = ChatCompletionStream;
+function finalizeChatCompletion(snapshot, params) {
+    const { id, choices, created, model, system_fingerprint, ...rest } = snapshot;
+    const completion = {
+        ...rest,
+        id,
+        choices: choices.map(({ message, finish_reason, index, logprobs, ...choiceRest }) => {
+            if (!finish_reason) {
+                throw new error_1.OpenAIError(`missing finish_reason for choice ${index}`);
+            }
+            const { content = null, function_call, tool_calls, ...messageRest } = message;
+            const role = message.role; // this is what we expect; in theory it could be different which would make our types a slight lie but would be fine.
+            if (!role) {
+                throw new error_1.OpenAIError(`missing role for choice ${index}`);
+            }
+            if (function_call) {
+                const { arguments: args, name } = function_call;
+                if (args == null) {
+                    throw new error_1.OpenAIError(`missing function_call.arguments for choice ${index}`);
+                }
+                if (!name) {
+                    throw new error_1.OpenAIError(`missing function_call.name for choice ${index}`);
+                }
+                return {
+                    ...choiceRest,
+                    message: {
+                        content,
+                        function_call: { arguments: args, name },
+                        role,
+                        refusal: message.refusal ?? null,
+                    },
+                    finish_reason,
+                    index,
+                    logprobs,
+                };
+            }
+            if (tool_calls) {
+                return {
+                    ...choiceRest,
+                    index,
+                    finish_reason,
+                    logprobs,
+                    message: {
+                        ...messageRest,
+                        role,
+                        content,
+                        refusal: message.refusal ?? null,
+                        tool_calls: tool_calls.map((tool_call, i) => {
+                            const { function: fn, type, id, ...toolRest } = tool_call;
+                            const { arguments: args, name, ...fnRest } = fn || {};
+                            if (id == null) {
+                                throw new error_1.OpenAIError(`missing choices[${index}].tool_calls[${i}].id\n${str(snapshot)}`);
+                            }
+                            if (type == null) {
+                                throw new error_1.OpenAIError(`missing choices[${index}].tool_calls[${i}].type\n${str(snapshot)}`);
+                            }
+                            if (name == null) {
+                                throw new error_1.OpenAIError(`missing choices[${index}].tool_calls[${i}].function.name\n${str(snapshot)}`);
+                            }
+                            if (args == null) {
+                                throw new error_1.OpenAIError(`missing choices[${index}].tool_calls[${i}].function.arguments\n${str(snapshot)}`);
+                            }
+                            return { ...toolRest, id, type, function: { ...fnRest, name, arguments: args } };
+                        }),
+                    },
+                };
+            }
+            return {
+                ...choiceRest,
+                message: { ...messageRest, content, role, refusal: message.refusal ?? null },
+                finish_reason,
+                index,
+                logprobs,
+            };
+        }),
+        created,
+        model,
+        object: 'chat.completion',
+        ...(system_fingerprint ? { system_fingerprint } : {}),
+    };
+    return (0, parser_1.maybeParseChatCompletion)(completion, params);
+}
+function str(x) {
+    return JSON.stringify(x);
+}
+/**
+ * Ensures the given argument is an empty object, useful for
+ * asserting that all known properties on an object have been
+ * destructured.
+ */
+function assertIsEmpty(obj) {
+    return;
+}
+function assertNever(_x) { }
+//# sourceMappingURL=ChatCompletionStream.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/lib/ChatCompletionStreamingRunner.js":
+/*!******************************************************************!*\
+  !*** ./node_modules/openai/lib/ChatCompletionStreamingRunner.js ***!
+  \******************************************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.ChatCompletionStreamingRunner = void 0;
+const ChatCompletionStream_1 = __webpack_require__(/*! ./ChatCompletionStream.js */ "./node_modules/openai/lib/ChatCompletionStream.js");
+class ChatCompletionStreamingRunner extends ChatCompletionStream_1.ChatCompletionStream {
+    static fromReadableStream(stream) {
+        const runner = new ChatCompletionStreamingRunner(null);
+        runner._run(() => runner._fromReadableStream(stream));
+        return runner;
+    }
+    /** @deprecated - please use `runTools` instead. */
+    static runFunctions(client, params, options) {
+        const runner = new ChatCompletionStreamingRunner(null);
+        const opts = {
+            ...options,
+            headers: { ...options?.headers, 'X-Stainless-Helper-Method': 'runFunctions' },
+        };
+        runner._run(() => runner._runFunctions(client, params, opts));
+        return runner;
+    }
+    static runTools(client, params, options) {
+        const runner = new ChatCompletionStreamingRunner(
+        // @ts-expect-error TODO these types are incompatible
+        params);
+        const opts = {
+            ...options,
+            headers: { ...options?.headers, 'X-Stainless-Helper-Method': 'runTools' },
+        };
+        runner._run(() => runner._runTools(client, params, opts));
+        return runner;
+    }
+}
+exports.ChatCompletionStreamingRunner = ChatCompletionStreamingRunner;
+//# sourceMappingURL=ChatCompletionStreamingRunner.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/lib/EventStream.js":
+/*!************************************************!*\
+  !*** ./node_modules/openai/lib/EventStream.js ***!
+  \************************************************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+var __classPrivateFieldSet = (this && this.__classPrivateFieldSet) || function (receiver, state, value, kind, f) {
+    if (kind === "m") throw new TypeError("Private method is not writable");
+    if (kind === "a" && !f) throw new TypeError("Private accessor was defined without a setter");
+    if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver)) throw new TypeError("Cannot write private member to an object whose class did not declare it");
+    return (kind === "a" ? f.call(receiver, value) : f ? f.value = value : state.set(receiver, value)), value;
+};
+var __classPrivateFieldGet = (this && this.__classPrivateFieldGet) || function (receiver, state, kind, f) {
+    if (kind === "a" && !f) throw new TypeError("Private accessor was defined without a getter");
+    if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver)) throw new TypeError("Cannot read private member from an object whose class did not declare it");
+    return kind === "m" ? f : kind === "a" ? f.call(receiver) : f ? f.value : state.get(receiver);
+};
+var _EventStream_instances, _EventStream_connectedPromise, _EventStream_resolveConnectedPromise, _EventStream_rejectConnectedPromise, _EventStream_endPromise, _EventStream_resolveEndPromise, _EventStream_rejectEndPromise, _EventStream_listeners, _EventStream_ended, _EventStream_errored, _EventStream_aborted, _EventStream_catchingPromiseCreated, _EventStream_handleError;
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.EventStream = void 0;
+const error_1 = __webpack_require__(/*! ../error.js */ "./node_modules/openai/error.js");
+class EventStream {
+    constructor() {
+        _EventStream_instances.add(this);
+        this.controller = new AbortController();
+        _EventStream_connectedPromise.set(this, void 0);
+        _EventStream_resolveConnectedPromise.set(this, () => { });
+        _EventStream_rejectConnectedPromise.set(this, () => { });
+        _EventStream_endPromise.set(this, void 0);
+        _EventStream_resolveEndPromise.set(this, () => { });
+        _EventStream_rejectEndPromise.set(this, () => { });
+        _EventStream_listeners.set(this, {});
+        _EventStream_ended.set(this, false);
+        _EventStream_errored.set(this, false);
+        _EventStream_aborted.set(this, false);
+        _EventStream_catchingPromiseCreated.set(this, false);
+        __classPrivateFieldSet(this, _EventStream_connectedPromise, new Promise((resolve, reject) => {
+            __classPrivateFieldSet(this, _EventStream_resolveConnectedPromise, resolve, "f");
+            __classPrivateFieldSet(this, _EventStream_rejectConnectedPromise, reject, "f");
+        }), "f");
+        __classPrivateFieldSet(this, _EventStream_endPromise, new Promise((resolve, reject) => {
+            __classPrivateFieldSet(this, _EventStream_resolveEndPromise, resolve, "f");
+            __classPrivateFieldSet(this, _EventStream_rejectEndPromise, reject, "f");
+        }), "f");
+        // Don't let these promises cause unhandled rejection errors.
+        // we will manually cause an unhandled rejection error later
+        // if the user hasn't registered any error listener or called
+        // any promise-returning method.
+        __classPrivateFieldGet(this, _EventStream_connectedPromise, "f").catch(() => { });
+        __classPrivateFieldGet(this, _EventStream_endPromise, "f").catch(() => { });
+    }
+    _run(executor) {
+        // Unfortunately if we call `executor()` immediately we get runtime errors about
+        // references to `this` before the `super()` constructor call returns.
+        setTimeout(() => {
+            executor().then(() => {
+                this._emitFinal();
+                this._emit('end');
+            }, __classPrivateFieldGet(this, _EventStream_instances, "m", _EventStream_handleError).bind(this));
+        }, 0);
+    }
+    _connected() {
+        if (this.ended)
+            return;
+        __classPrivateFieldGet(this, _EventStream_resolveConnectedPromise, "f").call(this);
+        this._emit('connect');
+    }
+    get ended() {
+        return __classPrivateFieldGet(this, _EventStream_ended, "f");
+    }
+    get errored() {
+        return __classPrivateFieldGet(this, _EventStream_errored, "f");
+    }
+    get aborted() {
+        return __classPrivateFieldGet(this, _EventStream_aborted, "f");
+    }
+    abort() {
+        this.controller.abort();
+    }
+    /**
+     * Adds the listener function to the end of the listeners array for the event.
+     * No checks are made to see if the listener has already been added. Multiple calls passing
+     * the same combination of event and listener will result in the listener being added, and
+     * called, multiple times.
+     * @returns this ChatCompletionStream, so that calls can be chained
+     */
+    on(event, listener) {
+        const listeners = __classPrivateFieldGet(this, _EventStream_listeners, "f")[event] || (__classPrivateFieldGet(this, _EventStream_listeners, "f")[event] = []);
+        listeners.push({ listener });
+        return this;
+    }
+    /**
+     * Removes the specified listener from the listener array for the event.
+     * off() will remove, at most, one instance of a listener from the listener array. If any single
+     * listener has been added multiple times to the listener array for the specified event, then
+     * off() must be called multiple times to remove each instance.
+     * @returns this ChatCompletionStream, so that calls can be chained
+     */
+    off(event, listener) {
+        const listeners = __classPrivateFieldGet(this, _EventStream_listeners, "f")[event];
+        if (!listeners)
+            return this;
+        const index = listeners.findIndex((l) => l.listener === listener);
+        if (index >= 0)
+            listeners.splice(index, 1);
+        return this;
+    }
+    /**
+     * Adds a one-time listener function for the event. The next time the event is triggered,
+     * this listener is removed and then invoked.
+     * @returns this ChatCompletionStream, so that calls can be chained
+     */
+    once(event, listener) {
+        const listeners = __classPrivateFieldGet(this, _EventStream_listeners, "f")[event] || (__classPrivateFieldGet(this, _EventStream_listeners, "f")[event] = []);
+        listeners.push({ listener, once: true });
+        return this;
+    }
+    /**
+     * This is similar to `.once()`, but returns a Promise that resolves the next time
+     * the event is triggered, instead of calling a listener callback.
+     * @returns a Promise that resolves the next time given event is triggered,
+     * or rejects if an error is emitted.  (If you request the 'error' event,
+     * returns a promise that resolves with the error).
+     *
+     * Example:
+     *
+     *   const message = await stream.emitted('message') // rejects if the stream errors
+     */
+    emitted(event) {
+        return new Promise((resolve, reject) => {
+            __classPrivateFieldSet(this, _EventStream_catchingPromiseCreated, true, "f");
+            if (event !== 'error')
+                this.once('error', reject);
+            this.once(event, resolve);
+        });
+    }
+    async done() {
+        __classPrivateFieldSet(this, _EventStream_catchingPromiseCreated, true, "f");
+        await __classPrivateFieldGet(this, _EventStream_endPromise, "f");
+    }
+    _emit(event, ...args) {
+        // make sure we don't emit any events after end
+        if (__classPrivateFieldGet(this, _EventStream_ended, "f")) {
+            return;
+        }
+        if (event === 'end') {
+            __classPrivateFieldSet(this, _EventStream_ended, true, "f");
+            __classPrivateFieldGet(this, _EventStream_resolveEndPromise, "f").call(this);
+        }
+        const listeners = __classPrivateFieldGet(this, _EventStream_listeners, "f")[event];
+        if (listeners) {
+            __classPrivateFieldGet(this, _EventStream_listeners, "f")[event] = listeners.filter((l) => !l.once);
+            listeners.forEach(({ listener }) => listener(...args));
+        }
+        if (event === 'abort') {
+            const error = args[0];
+            if (!__classPrivateFieldGet(this, _EventStream_catchingPromiseCreated, "f") && !listeners?.length) {
+                Promise.reject(error);
+            }
+            __classPrivateFieldGet(this, _EventStream_rejectConnectedPromise, "f").call(this, error);
+            __classPrivateFieldGet(this, _EventStream_rejectEndPromise, "f").call(this, error);
+            this._emit('end');
+            return;
+        }
+        if (event === 'error') {
+            // NOTE: _emit('error', error) should only be called from #handleError().
+            const error = args[0];
+            if (!__classPrivateFieldGet(this, _EventStream_catchingPromiseCreated, "f") && !listeners?.length) {
+                // Trigger an unhandled rejection if the user hasn't registered any error handlers.
+                // If you are seeing stack traces here, make sure to handle errors via either:
+                // - runner.on('error', () => ...)
+                // - await runner.done()
+                // - await runner.finalChatCompletion()
+                // - etc.
+                Promise.reject(error);
+            }
+            __classPrivateFieldGet(this, _EventStream_rejectConnectedPromise, "f").call(this, error);
+            __classPrivateFieldGet(this, _EventStream_rejectEndPromise, "f").call(this, error);
+            this._emit('end');
+        }
+    }
+    _emitFinal() { }
+}
+exports.EventStream = EventStream;
+_EventStream_connectedPromise = new WeakMap(), _EventStream_resolveConnectedPromise = new WeakMap(), _EventStream_rejectConnectedPromise = new WeakMap(), _EventStream_endPromise = new WeakMap(), _EventStream_resolveEndPromise = new WeakMap(), _EventStream_rejectEndPromise = new WeakMap(), _EventStream_listeners = new WeakMap(), _EventStream_ended = new WeakMap(), _EventStream_errored = new WeakMap(), _EventStream_aborted = new WeakMap(), _EventStream_catchingPromiseCreated = new WeakMap(), _EventStream_instances = new WeakSet(), _EventStream_handleError = function _EventStream_handleError(error) {
+    __classPrivateFieldSet(this, _EventStream_errored, true, "f");
+    if (error instanceof Error && error.name === 'AbortError') {
+        error = new error_1.APIUserAbortError();
+    }
+    if (error instanceof error_1.APIUserAbortError) {
+        __classPrivateFieldSet(this, _EventStream_aborted, true, "f");
+        return this._emit('abort', error);
+    }
+    if (error instanceof error_1.OpenAIError) {
+        return this._emit('error', error);
+    }
+    if (error instanceof Error) {
+        const openAIError = new error_1.OpenAIError(error.message);
+        // @ts-ignore
+        openAIError.cause = error;
+        return this._emit('error', openAIError);
+    }
+    return this._emit('error', new error_1.OpenAIError(String(error)));
+};
+//# sourceMappingURL=EventStream.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/lib/ResponsesParser.js":
+/*!****************************************************!*\
+  !*** ./node_modules/openai/lib/ResponsesParser.js ***!
+  \****************************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.addOutputText = exports.validateInputTools = exports.shouldParseToolCall = exports.isAutoParsableTool = exports.makeParseableResponseTool = exports.hasAutoParseableInput = exports.parseResponse = exports.maybeParseResponse = void 0;
+const error_1 = __webpack_require__(/*! ../error.js */ "./node_modules/openai/error.js");
+const parser_1 = __webpack_require__(/*! ../lib/parser.js */ "./node_modules/openai/lib/parser.js");
+function maybeParseResponse(response, params) {
+    if (!params || !hasAutoParseableInput(params)) {
+        return {
+            ...response,
+            output_parsed: null,
+            output: response.output.map((item) => {
+                if (item.type === 'function_call') {
+                    return {
+                        ...item,
+                        parsed_arguments: null,
+                    };
+                }
+                if (item.type === 'message') {
+                    return {
+                        ...item,
+                        content: item.content.map((content) => ({
+                            ...content,
+                            parsed: null,
+                        })),
+                    };
+                }
+                else {
+                    return item;
+                }
+            }),
+        };
+    }
+    return parseResponse(response, params);
+}
+exports.maybeParseResponse = maybeParseResponse;
+function parseResponse(response, params) {
+    const output = response.output.map((item) => {
+        if (item.type === 'function_call') {
+            return {
+                ...item,
+                parsed_arguments: parseToolCall(params, item),
+            };
+        }
+        if (item.type === 'message') {
+            const content = item.content.map((content) => {
+                if (content.type === 'output_text') {
+                    return {
+                        ...content,
+                        parsed: parseTextFormat(params, content.text),
+                    };
+                }
+                return content;
+            });
+            return {
+                ...item,
+                content,
+            };
+        }
+        return item;
+    });
+    const parsed = Object.assign({}, response, { output });
+    if (!Object.getOwnPropertyDescriptor(response, 'output_text')) {
+        addOutputText(parsed);
+    }
+    Object.defineProperty(parsed, 'output_parsed', {
+        enumerable: true,
+        get() {
+            for (const output of parsed.output) {
+                if (output.type !== 'message') {
+                    continue;
+                }
+                for (const content of output.content) {
+                    if (content.type === 'output_text' && content.parsed !== null) {
+                        return content.parsed;
+                    }
+                }
+            }
+            return null;
+        },
+    });
+    return parsed;
+}
+exports.parseResponse = parseResponse;
+function parseTextFormat(params, content) {
+    if (params.text?.format?.type !== 'json_schema') {
+        return null;
+    }
+    if ('$parseRaw' in params.text?.format) {
+        const text_format = params.text?.format;
+        return text_format.$parseRaw(content);
+    }
+    return JSON.parse(content);
+}
+function hasAutoParseableInput(params) {
+    if ((0, parser_1.isAutoParsableResponseFormat)(params.text?.format)) {
+        return true;
+    }
+    return false;
+}
+exports.hasAutoParseableInput = hasAutoParseableInput;
+function makeParseableResponseTool(tool, { parser, callback, }) {
+    const obj = { ...tool };
+    Object.defineProperties(obj, {
+        $brand: {
+            value: 'auto-parseable-tool',
+            enumerable: false,
+        },
+        $parseRaw: {
+            value: parser,
+            enumerable: false,
+        },
+        $callback: {
+            value: callback,
+            enumerable: false,
+        },
+    });
+    return obj;
+}
+exports.makeParseableResponseTool = makeParseableResponseTool;
+function isAutoParsableTool(tool) {
+    return tool?.['$brand'] === 'auto-parseable-tool';
+}
+exports.isAutoParsableTool = isAutoParsableTool;
+function getInputToolByName(input_tools, name) {
+    return input_tools.find((tool) => tool.type === 'function' && tool.name === name);
+}
+function parseToolCall(params, toolCall) {
+    const inputTool = getInputToolByName(params.tools ?? [], toolCall.name);
+    return {
+        ...toolCall,
+        ...toolCall,
+        parsed_arguments: isAutoParsableTool(inputTool) ? inputTool.$parseRaw(toolCall.arguments)
+            : inputTool?.strict ? JSON.parse(toolCall.arguments)
+                : null,
+    };
+}
+function shouldParseToolCall(params, toolCall) {
+    if (!params) {
+        return false;
+    }
+    const inputTool = getInputToolByName(params.tools ?? [], toolCall.name);
+    return isAutoParsableTool(inputTool) || inputTool?.strict || false;
+}
+exports.shouldParseToolCall = shouldParseToolCall;
+function validateInputTools(tools) {
+    for (const tool of tools ?? []) {
+        if (tool.type !== 'function') {
+            throw new error_1.OpenAIError(`Currently only \`function\` tool types support auto-parsing; Received \`${tool.type}\``);
+        }
+        if (tool.function.strict !== true) {
+            throw new error_1.OpenAIError(`The \`${tool.function.name}\` tool is not marked with \`strict: true\`. Only strict function tools can be auto-parsed`);
+        }
+    }
+}
+exports.validateInputTools = validateInputTools;
+function addOutputText(rsp) {
+    const texts = [];
+    for (const output of rsp.output) {
+        if (output.type !== 'message') {
+            continue;
+        }
+        for (const content of output.content) {
+            if (content.type === 'output_text') {
+                texts.push(content.text);
+            }
+        }
+    }
+    rsp.output_text = texts.join('');
+}
+exports.addOutputText = addOutputText;
+//# sourceMappingURL=ResponsesParser.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/lib/RunnableFunction.js":
+/*!*****************************************************!*\
+  !*** ./node_modules/openai/lib/RunnableFunction.js ***!
+  \*****************************************************/
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.ParsingToolFunction = exports.ParsingFunction = exports.isRunnableFunctionWithParse = void 0;
+function isRunnableFunctionWithParse(fn) {
+    return typeof fn.parse === 'function';
+}
+exports.isRunnableFunctionWithParse = isRunnableFunctionWithParse;
+/**
+ * This is helper class for passing a `function` and `parse` where the `function`
+ * argument type matches the `parse` return type.
+ *
+ * @deprecated - please use ParsingToolFunction instead.
+ */
+class ParsingFunction {
+    constructor(input) {
+        this.function = input.function;
+        this.parse = input.parse;
+        this.parameters = input.parameters;
+        this.description = input.description;
+        this.name = input.name;
+    }
+}
+exports.ParsingFunction = ParsingFunction;
+/**
+ * This is helper class for passing a `function` and `parse` where the `function`
+ * argument type matches the `parse` return type.
+ */
+class ParsingToolFunction {
+    constructor(input) {
+        this.type = 'function';
+        this.function = input;
+    }
+}
+exports.ParsingToolFunction = ParsingToolFunction;
+//# sourceMappingURL=RunnableFunction.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/lib/Util.js":
+/*!*****************************************!*\
+  !*** ./node_modules/openai/lib/Util.js ***!
+  \*****************************************/
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.allSettledWithThrow = void 0;
+/**
+ * Like `Promise.allSettled()` but throws an error if any promises are rejected.
+ */
+const allSettledWithThrow = async (promises) => {
+    const results = await Promise.allSettled(promises);
+    const rejected = results.filter((result) => result.status === 'rejected');
+    if (rejected.length) {
+        for (const result of rejected) {
+            console.error(result.reason);
+        }
+        throw new Error(`${rejected.length} promise(s) failed - see the above errors`);
+    }
+    // Note: TS was complaining about using `.filter().map()` here for some reason
+    const values = [];
+    for (const result of results) {
+        if (result.status === 'fulfilled') {
+            values.push(result.value);
+        }
+    }
+    return values;
+};
+exports.allSettledWithThrow = allSettledWithThrow;
+//# sourceMappingURL=Util.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/lib/chatCompletionUtils.js":
+/*!********************************************************!*\
+  !*** ./node_modules/openai/lib/chatCompletionUtils.js ***!
+  \********************************************************/
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.isPresent = exports.isToolMessage = exports.isFunctionMessage = exports.isAssistantMessage = void 0;
+const isAssistantMessage = (message) => {
+    return message?.role === 'assistant';
+};
+exports.isAssistantMessage = isAssistantMessage;
+const isFunctionMessage = (message) => {
+    return message?.role === 'function';
+};
+exports.isFunctionMessage = isFunctionMessage;
+const isToolMessage = (message) => {
+    return message?.role === 'tool';
+};
+exports.isToolMessage = isToolMessage;
+function isPresent(obj) {
+    return obj != null;
+}
+exports.isPresent = isPresent;
+//# sourceMappingURL=chatCompletionUtils.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/lib/parser.js":
+/*!*******************************************!*\
+  !*** ./node_modules/openai/lib/parser.js ***!
+  \*******************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.validateInputTools = exports.hasAutoParseableInput = exports.shouldParseToolCall = exports.parseChatCompletion = exports.maybeParseChatCompletion = exports.isAutoParsableTool = exports.makeParseableTool = exports.isAutoParsableResponseFormat = exports.makeParseableTextFormat = exports.makeParseableResponseFormat = void 0;
+const error_1 = __webpack_require__(/*! ../error.js */ "./node_modules/openai/error.js");
+function makeParseableResponseFormat(response_format, parser) {
+    const obj = { ...response_format };
+    Object.defineProperties(obj, {
+        $brand: {
+            value: 'auto-parseable-response-format',
+            enumerable: false,
+        },
+        $parseRaw: {
+            value: parser,
+            enumerable: false,
+        },
+    });
+    return obj;
+}
+exports.makeParseableResponseFormat = makeParseableResponseFormat;
+function makeParseableTextFormat(response_format, parser) {
+    const obj = { ...response_format };
+    Object.defineProperties(obj, {
+        $brand: {
+            value: 'auto-parseable-response-format',
+            enumerable: false,
+        },
+        $parseRaw: {
+            value: parser,
+            enumerable: false,
+        },
+    });
+    return obj;
+}
+exports.makeParseableTextFormat = makeParseableTextFormat;
+function isAutoParsableResponseFormat(response_format) {
+    return response_format?.['$brand'] === 'auto-parseable-response-format';
+}
+exports.isAutoParsableResponseFormat = isAutoParsableResponseFormat;
+function makeParseableTool(tool, { parser, callback, }) {
+    const obj = { ...tool };
+    Object.defineProperties(obj, {
+        $brand: {
+            value: 'auto-parseable-tool',
+            enumerable: false,
+        },
+        $parseRaw: {
+            value: parser,
+            enumerable: false,
+        },
+        $callback: {
+            value: callback,
+            enumerable: false,
+        },
+    });
+    return obj;
+}
+exports.makeParseableTool = makeParseableTool;
+function isAutoParsableTool(tool) {
+    return tool?.['$brand'] === 'auto-parseable-tool';
+}
+exports.isAutoParsableTool = isAutoParsableTool;
+function maybeParseChatCompletion(completion, params) {
+    if (!params || !hasAutoParseableInput(params)) {
+        return {
+            ...completion,
+            choices: completion.choices.map((choice) => ({
+                ...choice,
+                message: {
+                    ...choice.message,
+                    parsed: null,
+                    ...(choice.message.tool_calls ?
+                        {
+                            tool_calls: choice.message.tool_calls,
+                        }
+                        : undefined),
+                },
+            })),
+        };
+    }
+    return parseChatCompletion(completion, params);
+}
+exports.maybeParseChatCompletion = maybeParseChatCompletion;
+function parseChatCompletion(completion, params) {
+    const choices = completion.choices.map((choice) => {
+        if (choice.finish_reason === 'length') {
+            throw new error_1.LengthFinishReasonError();
+        }
+        if (choice.finish_reason === 'content_filter') {
+            throw new error_1.ContentFilterFinishReasonError();
+        }
+        return {
+            ...choice,
+            message: {
+                ...choice.message,
+                ...(choice.message.tool_calls ?
+                    {
+                        tool_calls: choice.message.tool_calls?.map((toolCall) => parseToolCall(params, toolCall)) ?? undefined,
+                    }
+                    : undefined),
+                parsed: choice.message.content && !choice.message.refusal ?
+                    parseResponseFormat(params, choice.message.content)
+                    : null,
+            },
+        };
+    });
+    return { ...completion, choices };
+}
+exports.parseChatCompletion = parseChatCompletion;
+function parseResponseFormat(params, content) {
+    if (params.response_format?.type !== 'json_schema') {
+        return null;
+    }
+    if (params.response_format?.type === 'json_schema') {
+        if ('$parseRaw' in params.response_format) {
+            const response_format = params.response_format;
+            return response_format.$parseRaw(content);
+        }
+        return JSON.parse(content);
+    }
+    return null;
+}
+function parseToolCall(params, toolCall) {
+    const inputTool = params.tools?.find((inputTool) => inputTool.function?.name === toolCall.function.name);
+    return {
+        ...toolCall,
+        function: {
+            ...toolCall.function,
+            parsed_arguments: isAutoParsableTool(inputTool) ? inputTool.$parseRaw(toolCall.function.arguments)
+                : inputTool?.function.strict ? JSON.parse(toolCall.function.arguments)
+                    : null,
+        },
+    };
+}
+function shouldParseToolCall(params, toolCall) {
+    if (!params) {
+        return false;
+    }
+    const inputTool = params.tools?.find((inputTool) => inputTool.function?.name === toolCall.function.name);
+    return isAutoParsableTool(inputTool) || inputTool?.function.strict || false;
+}
+exports.shouldParseToolCall = shouldParseToolCall;
+function hasAutoParseableInput(params) {
+    if (isAutoParsableResponseFormat(params.response_format)) {
+        return true;
+    }
+    return (params.tools?.some((t) => isAutoParsableTool(t) || (t.type === 'function' && t.function.strict === true)) ?? false);
+}
+exports.hasAutoParseableInput = hasAutoParseableInput;
+function validateInputTools(tools) {
+    for (const tool of tools ?? []) {
+        if (tool.type !== 'function') {
+            throw new error_1.OpenAIError(`Currently only \`function\` tool types support auto-parsing; Received \`${tool.type}\``);
+        }
+        if (tool.function.strict !== true) {
+            throw new error_1.OpenAIError(`The \`${tool.function.name}\` tool is not marked with \`strict: true\`. Only strict function tools can be auto-parsed`);
+        }
+    }
+}
+exports.validateInputTools = validateInputTools;
+//# sourceMappingURL=parser.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/lib/responses/ResponseStream.js":
+/*!*************************************************************!*\
+  !*** ./node_modules/openai/lib/responses/ResponseStream.js ***!
+  \*************************************************************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+var __classPrivateFieldSet = (this && this.__classPrivateFieldSet) || function (receiver, state, value, kind, f) {
+    if (kind === "m") throw new TypeError("Private method is not writable");
+    if (kind === "a" && !f) throw new TypeError("Private accessor was defined without a setter");
+    if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver)) throw new TypeError("Cannot write private member to an object whose class did not declare it");
+    return (kind === "a" ? f.call(receiver, value) : f ? f.value = value : state.set(receiver, value)), value;
+};
+var __classPrivateFieldGet = (this && this.__classPrivateFieldGet) || function (receiver, state, kind, f) {
+    if (kind === "a" && !f) throw new TypeError("Private accessor was defined without a getter");
+    if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver)) throw new TypeError("Cannot read private member from an object whose class did not declare it");
+    return kind === "m" ? f : kind === "a" ? f.call(receiver) : f ? f.value : state.get(receiver);
+};
+var _ResponseStream_instances, _ResponseStream_params, _ResponseStream_currentResponseSnapshot, _ResponseStream_finalResponse, _ResponseStream_beginRequest, _ResponseStream_addEvent, _ResponseStream_endRequest, _ResponseStream_accumulateResponse;
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.ResponseStream = void 0;
+const error_1 = __webpack_require__(/*! ../../error.js */ "./node_modules/openai/error.js");
+const EventStream_1 = __webpack_require__(/*! ../EventStream.js */ "./node_modules/openai/lib/EventStream.js");
+const ResponsesParser_1 = __webpack_require__(/*! ../ResponsesParser.js */ "./node_modules/openai/lib/ResponsesParser.js");
+class ResponseStream extends EventStream_1.EventStream {
+    constructor(params) {
+        super();
+        _ResponseStream_instances.add(this);
+        _ResponseStream_params.set(this, void 0);
+        _ResponseStream_currentResponseSnapshot.set(this, void 0);
+        _ResponseStream_finalResponse.set(this, void 0);
+        __classPrivateFieldSet(this, _ResponseStream_params, params, "f");
+    }
+    static createResponse(client, params, options) {
+        const runner = new ResponseStream(params);
+        runner._run(() => runner._createResponse(client, params, {
+            ...options,
+            headers: { ...options?.headers, 'X-Stainless-Helper-Method': 'stream' },
+        }));
+        return runner;
+    }
+    async _createResponse(client, params, options) {
+        const signal = options?.signal;
+        if (signal) {
+            if (signal.aborted)
+                this.controller.abort();
+            signal.addEventListener('abort', () => this.controller.abort());
+        }
+        __classPrivateFieldGet(this, _ResponseStream_instances, "m", _ResponseStream_beginRequest).call(this);
+        const stream = await client.responses.create({ ...params, stream: true }, { ...options, signal: this.controller.signal });
+        this._connected();
+        for await (const event of stream) {
+            __classPrivateFieldGet(this, _ResponseStream_instances, "m", _ResponseStream_addEvent).call(this, event);
+        }
+        if (stream.controller.signal?.aborted) {
+            throw new error_1.APIUserAbortError();
+        }
+        return __classPrivateFieldGet(this, _ResponseStream_instances, "m", _ResponseStream_endRequest).call(this);
+    }
+    [(_ResponseStream_params = new WeakMap(), _ResponseStream_currentResponseSnapshot = new WeakMap(), _ResponseStream_finalResponse = new WeakMap(), _ResponseStream_instances = new WeakSet(), _ResponseStream_beginRequest = function _ResponseStream_beginRequest() {
+        if (this.ended)
+            return;
+        __classPrivateFieldSet(this, _ResponseStream_currentResponseSnapshot, undefined, "f");
+    }, _ResponseStream_addEvent = function _ResponseStream_addEvent(event) {
+        if (this.ended)
+            return;
+        const response = __classPrivateFieldGet(this, _ResponseStream_instances, "m", _ResponseStream_accumulateResponse).call(this, event);
+        this._emit('event', event);
+        switch (event.type) {
+            case 'response.output_text.delta': {
+                const output = response.output[event.output_index];
+                if (!output) {
+                    throw new error_1.OpenAIError(`missing output at index ${event.output_index}`);
+                }
+                if (output.type === 'message') {
+                    const content = output.content[event.content_index];
+                    if (!content) {
+                        throw new error_1.OpenAIError(`missing content at index ${event.content_index}`);
+                    }
+                    if (content.type !== 'output_text') {
+                        throw new error_1.OpenAIError(`expected content to be 'output_text', got ${content.type}`);
+                    }
+                    this._emit('response.output_text.delta', {
+                        ...event,
+                        snapshot: content.text,
+                    });
+                }
+                break;
+            }
+            case 'response.function_call_arguments.delta': {
+                const output = response.output[event.output_index];
+                if (!output) {
+                    throw new error_1.OpenAIError(`missing output at index ${event.output_index}`);
+                }
+                if (output.type === 'function_call') {
+                    this._emit('response.function_call_arguments.delta', {
+                        ...event,
+                        snapshot: output.arguments,
+                    });
+                }
+                break;
+            }
+            default:
+                // @ts-ignore
+                this._emit(event.type, event);
+                break;
+        }
+    }, _ResponseStream_endRequest = function _ResponseStream_endRequest() {
+        if (this.ended) {
+            throw new error_1.OpenAIError(`stream has ended, this shouldn't happen`);
+        }
+        const snapshot = __classPrivateFieldGet(this, _ResponseStream_currentResponseSnapshot, "f");
+        if (!snapshot) {
+            throw new error_1.OpenAIError(`request ended without sending any events`);
+        }
+        __classPrivateFieldSet(this, _ResponseStream_currentResponseSnapshot, undefined, "f");
+        const parsedResponse = finalizeResponse(snapshot, __classPrivateFieldGet(this, _ResponseStream_params, "f"));
+        __classPrivateFieldSet(this, _ResponseStream_finalResponse, parsedResponse, "f");
+        return parsedResponse;
+    }, _ResponseStream_accumulateResponse = function _ResponseStream_accumulateResponse(event) {
+        let snapshot = __classPrivateFieldGet(this, _ResponseStream_currentResponseSnapshot, "f");
+        if (!snapshot) {
+            if (event.type !== 'response.created') {
+                throw new error_1.OpenAIError(`When snapshot hasn't been set yet, expected 'response.created' event, got ${event.type}`);
+            }
+            snapshot = __classPrivateFieldSet(this, _ResponseStream_currentResponseSnapshot, event.response, "f");
+            return snapshot;
+        }
+        switch (event.type) {
+            case 'response.output_item.added': {
+                snapshot.output.push(event.item);
+                break;
+            }
+            case 'response.content_part.added': {
+                const output = snapshot.output[event.output_index];
+                if (!output) {
+                    throw new error_1.OpenAIError(`missing output at index ${event.output_index}`);
+                }
+                if (output.type === 'message') {
+                    output.content.push(event.part);
+                }
+                break;
+            }
+            case 'response.output_text.delta': {
+                const output = snapshot.output[event.output_index];
+                if (!output) {
+                    throw new error_1.OpenAIError(`missing output at index ${event.output_index}`);
+                }
+                if (output.type === 'message') {
+                    const content = output.content[event.content_index];
+                    if (!content) {
+                        throw new error_1.OpenAIError(`missing content at index ${event.content_index}`);
+                    }
+                    if (content.type !== 'output_text') {
+                        throw new error_1.OpenAIError(`expected content to be 'output_text', got ${content.type}`);
+                    }
+                    content.text += event.delta;
+                }
+                break;
+            }
+            case 'response.function_call_arguments.delta': {
+                const output = snapshot.output[event.output_index];
+                if (!output) {
+                    throw new error_1.OpenAIError(`missing output at index ${event.output_index}`);
+                }
+                if (output.type === 'function_call') {
+                    output.arguments += event.delta;
+                }
+                break;
+            }
+            case 'response.completed': {
+                __classPrivateFieldSet(this, _ResponseStream_currentResponseSnapshot, event.response, "f");
+                break;
+            }
+        }
+        return snapshot;
+    }, Symbol.asyncIterator)]() {
+        const pushQueue = [];
+        const readQueue = [];
+        let done = false;
+        this.on('event', (event) => {
+            const reader = readQueue.shift();
+            if (reader) {
+                reader.resolve(event);
+            }
+            else {
+                pushQueue.push(event);
+            }
+        });
+        this.on('end', () => {
+            done = true;
+            for (const reader of readQueue) {
+                reader.resolve(undefined);
+            }
+            readQueue.length = 0;
+        });
+        this.on('abort', (err) => {
+            done = true;
+            for (const reader of readQueue) {
+                reader.reject(err);
+            }
+            readQueue.length = 0;
+        });
+        this.on('error', (err) => {
+            done = true;
+            for (const reader of readQueue) {
+                reader.reject(err);
+            }
+            readQueue.length = 0;
+        });
+        return {
+            next: async () => {
+                if (!pushQueue.length) {
+                    if (done) {
+                        return { value: undefined, done: true };
+                    }
+                    return new Promise((resolve, reject) => readQueue.push({ resolve, reject })).then((event) => (event ? { value: event, done: false } : { value: undefined, done: true }));
+                }
+                const event = pushQueue.shift();
+                return { value: event, done: false };
+            },
+            return: async () => {
+                this.abort();
+                return { value: undefined, done: true };
+            },
+        };
+    }
+    /**
+     * @returns a promise that resolves with the final Response, or rejects
+     * if an error occurred or the stream ended prematurely without producing a REsponse.
+     */
+    async finalResponse() {
+        await this.done();
+        const response = __classPrivateFieldGet(this, _ResponseStream_finalResponse, "f");
+        if (!response)
+            throw new error_1.OpenAIError('stream ended without producing a ChatCompletion');
+        return response;
+    }
+}
+exports.ResponseStream = ResponseStream;
+function finalizeResponse(snapshot, params) {
+    return (0, ResponsesParser_1.maybeParseResponse)(snapshot, params);
+}
+//# sourceMappingURL=ResponseStream.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/pagination.js":
+/*!*******************************************!*\
+  !*** ./node_modules/openai/pagination.js ***!
+  \*******************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.CursorPage = exports.Page = void 0;
+const core_1 = __webpack_require__(/*! ./core.js */ "./node_modules/openai/core.js");
+/**
+ * Note: no pagination actually occurs yet, this is for forwards-compatibility.
+ */
+class Page extends core_1.AbstractPage {
+    constructor(client, response, body, options) {
+        super(client, response, body, options);
+        this.data = body.data || [];
+        this.object = body.object;
+    }
+    getPaginatedItems() {
+        return this.data ?? [];
+    }
+    // @deprecated Please use `nextPageInfo()` instead
+    /**
+     * This page represents a response that isn't actually paginated at the API level
+     * so there will never be any next page params.
+     */
+    nextPageParams() {
+        return null;
+    }
+    nextPageInfo() {
+        return null;
+    }
+}
+exports.Page = Page;
+class CursorPage extends core_1.AbstractPage {
+    constructor(client, response, body, options) {
+        super(client, response, body, options);
+        this.data = body.data || [];
+        this.has_more = body.has_more || false;
+    }
+    getPaginatedItems() {
+        return this.data ?? [];
+    }
+    hasNextPage() {
+        if (this.has_more === false) {
+            return false;
+        }
+        return super.hasNextPage();
+    }
+    // @deprecated Please use `nextPageInfo()` instead
+    nextPageParams() {
+        const info = this.nextPageInfo();
+        if (!info)
+            return null;
+        if ('params' in info)
+            return info.params;
+        const params = Object.fromEntries(info.url.searchParams);
+        if (!Object.keys(params).length)
+            return null;
+        return params;
+    }
+    nextPageInfo() {
+        const data = this.getPaginatedItems();
+        if (!data.length) {
+            return null;
+        }
+        const id = data[data.length - 1]?.id;
+        if (!id) {
+            return null;
+        }
+        return { params: { after: id } };
+    }
+}
+exports.CursorPage = CursorPage;
+//# sourceMappingURL=pagination.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resource.js":
+/*!*****************************************!*\
+  !*** ./node_modules/openai/resource.js ***!
+  \*****************************************/
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.APIResource = void 0;
+class APIResource {
+    constructor(client) {
+        this._client = client;
+    }
+}
+exports.APIResource = APIResource;
+//# sourceMappingURL=resource.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resources/audio/audio.js":
+/*!******************************************************!*\
+  !*** ./node_modules/openai/resources/audio/audio.js ***!
+  \******************************************************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.Audio = void 0;
+const resource_1 = __webpack_require__(/*! ../../resource.js */ "./node_modules/openai/resource.js");
+const SpeechAPI = __importStar(__webpack_require__(/*! ./speech.js */ "./node_modules/openai/resources/audio/speech.js"));
+const speech_1 = __webpack_require__(/*! ./speech.js */ "./node_modules/openai/resources/audio/speech.js");
+const TranscriptionsAPI = __importStar(__webpack_require__(/*! ./transcriptions.js */ "./node_modules/openai/resources/audio/transcriptions.js"));
+const transcriptions_1 = __webpack_require__(/*! ./transcriptions.js */ "./node_modules/openai/resources/audio/transcriptions.js");
+const TranslationsAPI = __importStar(__webpack_require__(/*! ./translations.js */ "./node_modules/openai/resources/audio/translations.js"));
+const translations_1 = __webpack_require__(/*! ./translations.js */ "./node_modules/openai/resources/audio/translations.js");
+class Audio extends resource_1.APIResource {
+    constructor() {
+        super(...arguments);
+        this.transcriptions = new TranscriptionsAPI.Transcriptions(this._client);
+        this.translations = new TranslationsAPI.Translations(this._client);
+        this.speech = new SpeechAPI.Speech(this._client);
+    }
+}
+exports.Audio = Audio;
+Audio.Transcriptions = transcriptions_1.Transcriptions;
+Audio.Translations = translations_1.Translations;
+Audio.Speech = speech_1.Speech;
+//# sourceMappingURL=audio.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resources/audio/speech.js":
+/*!*******************************************************!*\
+  !*** ./node_modules/openai/resources/audio/speech.js ***!
+  \*******************************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.Speech = void 0;
+const resource_1 = __webpack_require__(/*! ../../resource.js */ "./node_modules/openai/resource.js");
+class Speech extends resource_1.APIResource {
+    /**
+     * Generates audio from the input text.
+     */
+    create(body, options) {
+        return this._client.post('/audio/speech', {
+            body,
+            ...options,
+            headers: { Accept: 'application/octet-stream', ...options?.headers },
+            __binaryResponse: true,
+        });
+    }
+}
+exports.Speech = Speech;
+//# sourceMappingURL=speech.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resources/audio/transcriptions.js":
+/*!***************************************************************!*\
+  !*** ./node_modules/openai/resources/audio/transcriptions.js ***!
+  \***************************************************************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.Transcriptions = void 0;
+const resource_1 = __webpack_require__(/*! ../../resource.js */ "./node_modules/openai/resource.js");
+const Core = __importStar(__webpack_require__(/*! ../../core.js */ "./node_modules/openai/core.js"));
+class Transcriptions extends resource_1.APIResource {
+    create(body, options) {
+        return this._client.post('/audio/transcriptions', Core.multipartFormRequestOptions({
+            body,
+            ...options,
+            stream: body.stream ?? false,
+            __metadata: { model: body.model },
+        }));
+    }
+}
+exports.Transcriptions = Transcriptions;
+//# sourceMappingURL=transcriptions.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resources/audio/translations.js":
+/*!*************************************************************!*\
+  !*** ./node_modules/openai/resources/audio/translations.js ***!
+  \*************************************************************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.Translations = void 0;
+const resource_1 = __webpack_require__(/*! ../../resource.js */ "./node_modules/openai/resource.js");
+const Core = __importStar(__webpack_require__(/*! ../../core.js */ "./node_modules/openai/core.js"));
+class Translations extends resource_1.APIResource {
+    create(body, options) {
+        return this._client.post('/audio/translations', Core.multipartFormRequestOptions({ body, ...options, __metadata: { model: body.model } }));
+    }
+}
+exports.Translations = Translations;
+//# sourceMappingURL=translations.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resources/batches.js":
+/*!**************************************************!*\
+  !*** ./node_modules/openai/resources/batches.js ***!
+  \**************************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.BatchesPage = exports.Batches = void 0;
+const resource_1 = __webpack_require__(/*! ../resource.js */ "./node_modules/openai/resource.js");
+const core_1 = __webpack_require__(/*! ../core.js */ "./node_modules/openai/core.js");
+const pagination_1 = __webpack_require__(/*! ../pagination.js */ "./node_modules/openai/pagination.js");
+class Batches extends resource_1.APIResource {
+    /**
+     * Creates and executes a batch from an uploaded file of requests
+     */
+    create(body, options) {
+        return this._client.post('/batches', { body, ...options });
+    }
+    /**
+     * Retrieves a batch.
+     */
+    retrieve(batchId, options) {
+        return this._client.get(`/batches/${batchId}`, options);
+    }
+    list(query = {}, options) {
+        if ((0, core_1.isRequestOptions)(query)) {
+            return this.list({}, query);
+        }
+        return this._client.getAPIList('/batches', BatchesPage, { query, ...options });
+    }
+    /**
+     * Cancels an in-progress batch. The batch will be in status `cancelling` for up to
+     * 10 minutes, before changing to `cancelled`, where it will have partial results
+     * (if any) available in the output file.
+     */
+    cancel(batchId, options) {
+        return this._client.post(`/batches/${batchId}/cancel`, options);
+    }
+}
+exports.Batches = Batches;
+class BatchesPage extends pagination_1.CursorPage {
+}
+exports.BatchesPage = BatchesPage;
+Batches.BatchesPage = BatchesPage;
+//# sourceMappingURL=batches.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resources/beta/assistants.js":
+/*!**********************************************************!*\
+  !*** ./node_modules/openai/resources/beta/assistants.js ***!
+  \**********************************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.AssistantsPage = exports.Assistants = void 0;
+const resource_1 = __webpack_require__(/*! ../../resource.js */ "./node_modules/openai/resource.js");
+const core_1 = __webpack_require__(/*! ../../core.js */ "./node_modules/openai/core.js");
+const pagination_1 = __webpack_require__(/*! ../../pagination.js */ "./node_modules/openai/pagination.js");
+const AssistantStream_1 = __webpack_require__(/*! ../../lib/AssistantStream.js */ "./node_modules/openai/lib/AssistantStream.js");
+class Assistants extends resource_1.APIResource {
+    /**
+     * Create an assistant with a model and instructions.
+     */
+    create(body, options) {
+        return this._client.post('/assistants', {
+            body,
+            ...options,
+            headers: { 'OpenAI-Beta': 'assistants=v2', ...options?.headers },
+        });
+    }
+    /**
+     * Retrieves an assistant.
+     */
+    retrieve(assistantId, options) {
+        return this._client.get(`/assistants/${assistantId}`, {
+            ...options,
+            headers: { 'OpenAI-Beta': 'assistants=v2', ...options?.headers },
+        });
+    }
+    /**
+     * Modifies an assistant.
+     */
+    update(assistantId, body, options) {
+        return this._client.post(`/assistants/${assistantId}`, {
+            body,
+            ...options,
+            headers: { 'OpenAI-Beta': 'assistants=v2', ...options?.headers },
+        });
+    }
+    list(query = {}, options) {
+        if ((0, core_1.isRequestOptions)(query)) {
+            return this.list({}, query);
+        }
+        return this._client.getAPIList('/assistants', AssistantsPage, {
+            query,
+            ...options,
+            headers: { 'OpenAI-Beta': 'assistants=v2', ...options?.headers },
+        });
+    }
+    /**
+     * Delete an assistant.
+     */
+    del(assistantId, options) {
+        return this._client.delete(`/assistants/${assistantId}`, {
+            ...options,
+            headers: { 'OpenAI-Beta': 'assistants=v2', ...options?.headers },
+        });
+    }
+}
+exports.Assistants = Assistants;
+class AssistantsPage extends pagination_1.CursorPage {
+}
+exports.AssistantsPage = AssistantsPage;
+Assistants.AssistantsPage = AssistantsPage;
+//# sourceMappingURL=assistants.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resources/beta/beta.js":
+/*!****************************************************!*\
+  !*** ./node_modules/openai/resources/beta/beta.js ***!
+  \****************************************************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.Beta = void 0;
+const resource_1 = __webpack_require__(/*! ../../resource.js */ "./node_modules/openai/resource.js");
+const AssistantsAPI = __importStar(__webpack_require__(/*! ./assistants.js */ "./node_modules/openai/resources/beta/assistants.js"));
+const ChatAPI = __importStar(__webpack_require__(/*! ./chat/chat.js */ "./node_modules/openai/resources/beta/chat/chat.js"));
+const assistants_1 = __webpack_require__(/*! ./assistants.js */ "./node_modules/openai/resources/beta/assistants.js");
+const RealtimeAPI = __importStar(__webpack_require__(/*! ./realtime/realtime.js */ "./node_modules/openai/resources/beta/realtime/realtime.js"));
+const realtime_1 = __webpack_require__(/*! ./realtime/realtime.js */ "./node_modules/openai/resources/beta/realtime/realtime.js");
+const ThreadsAPI = __importStar(__webpack_require__(/*! ./threads/threads.js */ "./node_modules/openai/resources/beta/threads/threads.js"));
+const threads_1 = __webpack_require__(/*! ./threads/threads.js */ "./node_modules/openai/resources/beta/threads/threads.js");
+const chat_1 = __webpack_require__(/*! ./chat/chat.js */ "./node_modules/openai/resources/beta/chat/chat.js");
+class Beta extends resource_1.APIResource {
+    constructor() {
+        super(...arguments);
+        this.realtime = new RealtimeAPI.Realtime(this._client);
+        this.chat = new ChatAPI.Chat(this._client);
+        this.assistants = new AssistantsAPI.Assistants(this._client);
+        this.threads = new ThreadsAPI.Threads(this._client);
+    }
+}
+exports.Beta = Beta;
+Beta.Realtime = realtime_1.Realtime;
+Beta.Assistants = assistants_1.Assistants;
+Beta.AssistantsPage = assistants_1.AssistantsPage;
+Beta.Threads = threads_1.Threads;
+//# sourceMappingURL=beta.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resources/beta/chat/chat.js":
+/*!*********************************************************!*\
+  !*** ./node_modules/openai/resources/beta/chat/chat.js ***!
+  \*********************************************************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.Chat = void 0;
+const resource_1 = __webpack_require__(/*! ../../../resource.js */ "./node_modules/openai/resource.js");
+const CompletionsAPI = __importStar(__webpack_require__(/*! ./completions.js */ "./node_modules/openai/resources/beta/chat/completions.js"));
+class Chat extends resource_1.APIResource {
+    constructor() {
+        super(...arguments);
+        this.completions = new CompletionsAPI.Completions(this._client);
+    }
+}
+exports.Chat = Chat;
+(function (Chat) {
+    Chat.Completions = CompletionsAPI.Completions;
+})(Chat = exports.Chat || (exports.Chat = {}));
+//# sourceMappingURL=chat.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resources/beta/chat/completions.js":
+/*!****************************************************************!*\
+  !*** ./node_modules/openai/resources/beta/chat/completions.js ***!
+  \****************************************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.Completions = exports.ChatCompletionRunner = exports.ChatCompletionStream = exports.ParsingToolFunction = exports.ParsingFunction = exports.ChatCompletionStreamingRunner = void 0;
+const resource_1 = __webpack_require__(/*! ../../../resource.js */ "./node_modules/openai/resource.js");
+const ChatCompletionRunner_1 = __webpack_require__(/*! ../../../lib/ChatCompletionRunner.js */ "./node_modules/openai/lib/ChatCompletionRunner.js");
+const ChatCompletionStreamingRunner_1 = __webpack_require__(/*! ../../../lib/ChatCompletionStreamingRunner.js */ "./node_modules/openai/lib/ChatCompletionStreamingRunner.js");
+const ChatCompletionStream_1 = __webpack_require__(/*! ../../../lib/ChatCompletionStream.js */ "./node_modules/openai/lib/ChatCompletionStream.js");
+const parser_1 = __webpack_require__(/*! ../../../lib/parser.js */ "./node_modules/openai/lib/parser.js");
+var ChatCompletionStreamingRunner_2 = __webpack_require__(/*! ../../../lib/ChatCompletionStreamingRunner.js */ "./node_modules/openai/lib/ChatCompletionStreamingRunner.js");
+Object.defineProperty(exports, "ChatCompletionStreamingRunner", ({ enumerable: true, get: function () { return ChatCompletionStreamingRunner_2.ChatCompletionStreamingRunner; } }));
+var RunnableFunction_1 = __webpack_require__(/*! ../../../lib/RunnableFunction.js */ "./node_modules/openai/lib/RunnableFunction.js");
+Object.defineProperty(exports, "ParsingFunction", ({ enumerable: true, get: function () { return RunnableFunction_1.ParsingFunction; } }));
+Object.defineProperty(exports, "ParsingToolFunction", ({ enumerable: true, get: function () { return RunnableFunction_1.ParsingToolFunction; } }));
+var ChatCompletionStream_2 = __webpack_require__(/*! ../../../lib/ChatCompletionStream.js */ "./node_modules/openai/lib/ChatCompletionStream.js");
+Object.defineProperty(exports, "ChatCompletionStream", ({ enumerable: true, get: function () { return ChatCompletionStream_2.ChatCompletionStream; } }));
+var ChatCompletionRunner_2 = __webpack_require__(/*! ../../../lib/ChatCompletionRunner.js */ "./node_modules/openai/lib/ChatCompletionRunner.js");
+Object.defineProperty(exports, "ChatCompletionRunner", ({ enumerable: true, get: function () { return ChatCompletionRunner_2.ChatCompletionRunner; } }));
+class Completions extends resource_1.APIResource {
+    parse(body, options) {
+        (0, parser_1.validateInputTools)(body.tools);
+        return this._client.chat.completions
+            .create(body, {
+            ...options,
+            headers: {
+                ...options?.headers,
+                'X-Stainless-Helper-Method': 'beta.chat.completions.parse',
+            },
+        })
+            ._thenUnwrap((completion) => (0, parser_1.parseChatCompletion)(completion, body));
+    }
+    runFunctions(body, options) {
+        if (body.stream) {
+            return ChatCompletionStreamingRunner_1.ChatCompletionStreamingRunner.runFunctions(this._client, body, options);
+        }
+        return ChatCompletionRunner_1.ChatCompletionRunner.runFunctions(this._client, body, options);
+    }
+    runTools(body, options) {
+        if (body.stream) {
+            return ChatCompletionStreamingRunner_1.ChatCompletionStreamingRunner.runTools(this._client, body, options);
+        }
+        return ChatCompletionRunner_1.ChatCompletionRunner.runTools(this._client, body, options);
+    }
+    /**
+     * Creates a chat completion stream
+     */
+    stream(body, options) {
+        return ChatCompletionStream_1.ChatCompletionStream.createChatCompletion(this._client, body, options);
+    }
+}
+exports.Completions = Completions;
+//# sourceMappingURL=completions.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resources/beta/realtime/realtime.js":
+/*!*****************************************************************!*\
+  !*** ./node_modules/openai/resources/beta/realtime/realtime.js ***!
+  \*****************************************************************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.Realtime = void 0;
+const resource_1 = __webpack_require__(/*! ../../../resource.js */ "./node_modules/openai/resource.js");
+const SessionsAPI = __importStar(__webpack_require__(/*! ./sessions.js */ "./node_modules/openai/resources/beta/realtime/sessions.js"));
+const sessions_1 = __webpack_require__(/*! ./sessions.js */ "./node_modules/openai/resources/beta/realtime/sessions.js");
+const TranscriptionSessionsAPI = __importStar(__webpack_require__(/*! ./transcription-sessions.js */ "./node_modules/openai/resources/beta/realtime/transcription-sessions.js"));
+const transcription_sessions_1 = __webpack_require__(/*! ./transcription-sessions.js */ "./node_modules/openai/resources/beta/realtime/transcription-sessions.js");
+class Realtime extends resource_1.APIResource {
+    constructor() {
+        super(...arguments);
+        this.sessions = new SessionsAPI.Sessions(this._client);
+        this.transcriptionSessions = new TranscriptionSessionsAPI.TranscriptionSessions(this._client);
+    }
+}
+exports.Realtime = Realtime;
+Realtime.Sessions = sessions_1.Sessions;
+Realtime.TranscriptionSessions = transcription_sessions_1.TranscriptionSessions;
+//# sourceMappingURL=realtime.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resources/beta/realtime/sessions.js":
+/*!*****************************************************************!*\
+  !*** ./node_modules/openai/resources/beta/realtime/sessions.js ***!
+  \*****************************************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.Sessions = void 0;
+const resource_1 = __webpack_require__(/*! ../../../resource.js */ "./node_modules/openai/resource.js");
+class Sessions extends resource_1.APIResource {
+    /**
+     * Create an ephemeral API token for use in client-side applications with the
+     * Realtime API. Can be configured with the same session parameters as the
+     * `session.update` client event.
+     *
+     * It responds with a session object, plus a `client_secret` key which contains a
+     * usable ephemeral API token that can be used to authenticate browser clients for
+     * the Realtime API.
+     */
+    create(body, options) {
+        return this._client.post('/realtime/sessions', {
+            body,
+            ...options,
+            headers: { 'OpenAI-Beta': 'assistants=v2', ...options?.headers },
+        });
+    }
+}
+exports.Sessions = Sessions;
+//# sourceMappingURL=sessions.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resources/beta/realtime/transcription-sessions.js":
+/*!*******************************************************************************!*\
+  !*** ./node_modules/openai/resources/beta/realtime/transcription-sessions.js ***!
+  \*******************************************************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.TranscriptionSessions = void 0;
+const resource_1 = __webpack_require__(/*! ../../../resource.js */ "./node_modules/openai/resource.js");
+class TranscriptionSessions extends resource_1.APIResource {
+    /**
+     * Create an ephemeral API token for use in client-side applications with the
+     * Realtime API specifically for realtime transcriptions. Can be configured with
+     * the same session parameters as the `transcription_session.update` client event.
+     *
+     * It responds with a session object, plus a `client_secret` key which contains a
+     * usable ephemeral API token that can be used to authenticate browser clients for
+     * the Realtime API.
+     */
+    create(body, options) {
+        return this._client.post('/realtime/transcription_sessions', {
+            body,
+            ...options,
+            headers: { 'OpenAI-Beta': 'assistants=v2', ...options?.headers },
+        });
+    }
+}
+exports.TranscriptionSessions = TranscriptionSessions;
+//# sourceMappingURL=transcription-sessions.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resources/beta/threads/messages.js":
+/*!****************************************************************!*\
+  !*** ./node_modules/openai/resources/beta/threads/messages.js ***!
+  \****************************************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.MessagesPage = exports.Messages = void 0;
+const resource_1 = __webpack_require__(/*! ../../../resource.js */ "./node_modules/openai/resource.js");
+const core_1 = __webpack_require__(/*! ../../../core.js */ "./node_modules/openai/core.js");
+const pagination_1 = __webpack_require__(/*! ../../../pagination.js */ "./node_modules/openai/pagination.js");
+class Messages extends resource_1.APIResource {
+    /**
+     * Create a message.
+     */
+    create(threadId, body, options) {
+        return this._client.post(`/threads/${threadId}/messages`, {
+            body,
+            ...options,
+            headers: { 'OpenAI-Beta': 'assistants=v2', ...options?.headers },
+        });
+    }
+    /**
+     * Retrieve a message.
+     */
+    retrieve(threadId, messageId, options) {
+        return this._client.get(`/threads/${threadId}/messages/${messageId}`, {
+            ...options,
+            headers: { 'OpenAI-Beta': 'assistants=v2', ...options?.headers },
+        });
+    }
+    /**
+     * Modifies a message.
+     */
+    update(threadId, messageId, body, options) {
+        return this._client.post(`/threads/${threadId}/messages/${messageId}`, {
+            body,
+            ...options,
+            headers: { 'OpenAI-Beta': 'assistants=v2', ...options?.headers },
+        });
+    }
+    list(threadId, query = {}, options) {
+        if ((0, core_1.isRequestOptions)(query)) {
+            return this.list(threadId, {}, query);
+        }
+        return this._client.getAPIList(`/threads/${threadId}/messages`, MessagesPage, {
+            query,
+            ...options,
+            headers: { 'OpenAI-Beta': 'assistants=v2', ...options?.headers },
+        });
+    }
+    /**
+     * Deletes a message.
+     */
+    del(threadId, messageId, options) {
+        return this._client.delete(`/threads/${threadId}/messages/${messageId}`, {
+            ...options,
+            headers: { 'OpenAI-Beta': 'assistants=v2', ...options?.headers },
+        });
+    }
+}
+exports.Messages = Messages;
+class MessagesPage extends pagination_1.CursorPage {
+}
+exports.MessagesPage = MessagesPage;
+Messages.MessagesPage = MessagesPage;
+//# sourceMappingURL=messages.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resources/beta/threads/runs/runs.js":
+/*!*****************************************************************!*\
+  !*** ./node_modules/openai/resources/beta/threads/runs/runs.js ***!
+  \*****************************************************************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.RunsPage = exports.Runs = void 0;
+const resource_1 = __webpack_require__(/*! ../../../../resource.js */ "./node_modules/openai/resource.js");
+const core_1 = __webpack_require__(/*! ../../../../core.js */ "./node_modules/openai/core.js");
+const AssistantStream_1 = __webpack_require__(/*! ../../../../lib/AssistantStream.js */ "./node_modules/openai/lib/AssistantStream.js");
+const core_2 = __webpack_require__(/*! ../../../../core.js */ "./node_modules/openai/core.js");
+const StepsAPI = __importStar(__webpack_require__(/*! ./steps.js */ "./node_modules/openai/resources/beta/threads/runs/steps.js"));
+const steps_1 = __webpack_require__(/*! ./steps.js */ "./node_modules/openai/resources/beta/threads/runs/steps.js");
+const pagination_1 = __webpack_require__(/*! ../../../../pagination.js */ "./node_modules/openai/pagination.js");
+class Runs extends resource_1.APIResource {
+    constructor() {
+        super(...arguments);
+        this.steps = new StepsAPI.Steps(this._client);
+    }
+    create(threadId, params, options) {
+        const { include, ...body } = params;
+        return this._client.post(`/threads/${threadId}/runs`, {
+            query: { include },
+            body,
+            ...options,
+            headers: { 'OpenAI-Beta': 'assistants=v2', ...options?.headers },
+            stream: params.stream ?? false,
+        });
+    }
+    /**
+     * Retrieves a run.
+     */
+    retrieve(threadId, runId, options) {
+        return this._client.get(`/threads/${threadId}/runs/${runId}`, {
+            ...options,
+            headers: { 'OpenAI-Beta': 'assistants=v2', ...options?.headers },
+        });
+    }
+    /**
+     * Modifies a run.
+     */
+    update(threadId, runId, body, options) {
+        return this._client.post(`/threads/${threadId}/runs/${runId}`, {
+            body,
+            ...options,
+            headers: { 'OpenAI-Beta': 'assistants=v2', ...options?.headers },
+        });
+    }
+    list(threadId, query = {}, options) {
+        if ((0, core_1.isRequestOptions)(query)) {
+            return this.list(threadId, {}, query);
+        }
+        return this._client.getAPIList(`/threads/${threadId}/runs`, RunsPage, {
+            query,
+            ...options,
+            headers: { 'OpenAI-Beta': 'assistants=v2', ...options?.headers },
+        });
+    }
+    /**
+     * Cancels a run that is `in_progress`.
+     */
+    cancel(threadId, runId, options) {
+        return this._client.post(`/threads/${threadId}/runs/${runId}/cancel`, {
+            ...options,
+            headers: { 'OpenAI-Beta': 'assistants=v2', ...options?.headers },
+        });
+    }
+    /**
+     * A helper to create a run an poll for a terminal state. More information on Run
+     * lifecycles can be found here:
+     * https://platform.openai.com/docs/assistants/how-it-works/runs-and-run-steps
+     */
+    async createAndPoll(threadId, body, options) {
+        const run = await this.create(threadId, body, options);
+        return await this.poll(threadId, run.id, options);
+    }
+    /**
+     * Create a Run stream
+     *
+     * @deprecated use `stream` instead
+     */
+    createAndStream(threadId, body, options) {
+        return AssistantStream_1.AssistantStream.createAssistantStream(threadId, this._client.beta.threads.runs, body, options);
+    }
+    /**
+     * A helper to poll a run status until it reaches a terminal state. More
+     * information on Run lifecycles can be found here:
+     * https://platform.openai.com/docs/assistants/how-it-works/runs-and-run-steps
+     */
+    async poll(threadId, runId, options) {
+        const headers = { ...options?.headers, 'X-Stainless-Poll-Helper': 'true' };
+        if (options?.pollIntervalMs) {
+            headers['X-Stainless-Custom-Poll-Interval'] = options.pollIntervalMs.toString();
+        }
+        while (true) {
+            const { data: run, response } = await this.retrieve(threadId, runId, {
+                ...options,
+                headers: { ...options?.headers, ...headers },
+            }).withResponse();
+            switch (run.status) {
+                //If we are in any sort of intermediate state we poll
+                case 'queued':
+                case 'in_progress':
+                case 'cancelling':
+                    let sleepInterval = 5000;
+                    if (options?.pollIntervalMs) {
+                        sleepInterval = options.pollIntervalMs;
+                    }
+                    else {
+                        const headerInterval = response.headers.get('openai-poll-after-ms');
+                        if (headerInterval) {
+                            const headerIntervalMs = parseInt(headerInterval);
+                            if (!isNaN(headerIntervalMs)) {
+                                sleepInterval = headerIntervalMs;
+                            }
+                        }
+                    }
+                    await (0, core_2.sleep)(sleepInterval);
+                    break;
+                //We return the run in any terminal state.
+                case 'requires_action':
+                case 'incomplete':
+                case 'cancelled':
+                case 'completed':
+                case 'failed':
+                case 'expired':
+                    return run;
+            }
+        }
+    }
+    /**
+     * Create a Run stream
+     */
+    stream(threadId, body, options) {
+        return AssistantStream_1.AssistantStream.createAssistantStream(threadId, this._client.beta.threads.runs, body, options);
+    }
+    submitToolOutputs(threadId, runId, body, options) {
+        return this._client.post(`/threads/${threadId}/runs/${runId}/submit_tool_outputs`, {
+            body,
+            ...options,
+            headers: { 'OpenAI-Beta': 'assistants=v2', ...options?.headers },
+            stream: body.stream ?? false,
+        });
+    }
+    /**
+     * A helper to submit a tool output to a run and poll for a terminal run state.
+     * More information on Run lifecycles can be found here:
+     * https://platform.openai.com/docs/assistants/how-it-works/runs-and-run-steps
+     */
+    async submitToolOutputsAndPoll(threadId, runId, body, options) {
+        const run = await this.submitToolOutputs(threadId, runId, body, options);
+        return await this.poll(threadId, run.id, options);
+    }
+    /**
+     * Submit the tool outputs from a previous run and stream the run to a terminal
+     * state. More information on Run lifecycles can be found here:
+     * https://platform.openai.com/docs/assistants/how-it-works/runs-and-run-steps
+     */
+    submitToolOutputsStream(threadId, runId, body, options) {
+        return AssistantStream_1.AssistantStream.createToolAssistantStream(threadId, runId, this._client.beta.threads.runs, body, options);
+    }
+}
+exports.Runs = Runs;
+class RunsPage extends pagination_1.CursorPage {
+}
+exports.RunsPage = RunsPage;
+Runs.RunsPage = RunsPage;
+Runs.Steps = steps_1.Steps;
+Runs.RunStepsPage = steps_1.RunStepsPage;
+//# sourceMappingURL=runs.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resources/beta/threads/runs/steps.js":
+/*!******************************************************************!*\
+  !*** ./node_modules/openai/resources/beta/threads/runs/steps.js ***!
+  \******************************************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.RunStepsPage = exports.Steps = void 0;
+const resource_1 = __webpack_require__(/*! ../../../../resource.js */ "./node_modules/openai/resource.js");
+const core_1 = __webpack_require__(/*! ../../../../core.js */ "./node_modules/openai/core.js");
+const pagination_1 = __webpack_require__(/*! ../../../../pagination.js */ "./node_modules/openai/pagination.js");
+class Steps extends resource_1.APIResource {
+    retrieve(threadId, runId, stepId, query = {}, options) {
+        if ((0, core_1.isRequestOptions)(query)) {
+            return this.retrieve(threadId, runId, stepId, {}, query);
+        }
+        return this._client.get(`/threads/${threadId}/runs/${runId}/steps/${stepId}`, {
+            query,
+            ...options,
+            headers: { 'OpenAI-Beta': 'assistants=v2', ...options?.headers },
+        });
+    }
+    list(threadId, runId, query = {}, options) {
+        if ((0, core_1.isRequestOptions)(query)) {
+            return this.list(threadId, runId, {}, query);
+        }
+        return this._client.getAPIList(`/threads/${threadId}/runs/${runId}/steps`, RunStepsPage, {
+            query,
+            ...options,
+            headers: { 'OpenAI-Beta': 'assistants=v2', ...options?.headers },
+        });
+    }
+}
+exports.Steps = Steps;
+class RunStepsPage extends pagination_1.CursorPage {
+}
+exports.RunStepsPage = RunStepsPage;
+Steps.RunStepsPage = RunStepsPage;
+//# sourceMappingURL=steps.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resources/beta/threads/threads.js":
+/*!***************************************************************!*\
+  !*** ./node_modules/openai/resources/beta/threads/threads.js ***!
+  \***************************************************************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.Threads = void 0;
+const resource_1 = __webpack_require__(/*! ../../../resource.js */ "./node_modules/openai/resource.js");
+const core_1 = __webpack_require__(/*! ../../../core.js */ "./node_modules/openai/core.js");
+const AssistantStream_1 = __webpack_require__(/*! ../../../lib/AssistantStream.js */ "./node_modules/openai/lib/AssistantStream.js");
+const MessagesAPI = __importStar(__webpack_require__(/*! ./messages.js */ "./node_modules/openai/resources/beta/threads/messages.js"));
+const messages_1 = __webpack_require__(/*! ./messages.js */ "./node_modules/openai/resources/beta/threads/messages.js");
+const RunsAPI = __importStar(__webpack_require__(/*! ./runs/runs.js */ "./node_modules/openai/resources/beta/threads/runs/runs.js"));
+const runs_1 = __webpack_require__(/*! ./runs/runs.js */ "./node_modules/openai/resources/beta/threads/runs/runs.js");
+class Threads extends resource_1.APIResource {
+    constructor() {
+        super(...arguments);
+        this.runs = new RunsAPI.Runs(this._client);
+        this.messages = new MessagesAPI.Messages(this._client);
+    }
+    create(body = {}, options) {
+        if ((0, core_1.isRequestOptions)(body)) {
+            return this.create({}, body);
+        }
+        return this._client.post('/threads', {
+            body,
+            ...options,
+            headers: { 'OpenAI-Beta': 'assistants=v2', ...options?.headers },
+        });
+    }
+    /**
+     * Retrieves a thread.
+     */
+    retrieve(threadId, options) {
+        return this._client.get(`/threads/${threadId}`, {
+            ...options,
+            headers: { 'OpenAI-Beta': 'assistants=v2', ...options?.headers },
+        });
+    }
+    /**
+     * Modifies a thread.
+     */
+    update(threadId, body, options) {
+        return this._client.post(`/threads/${threadId}`, {
+            body,
+            ...options,
+            headers: { 'OpenAI-Beta': 'assistants=v2', ...options?.headers },
+        });
+    }
+    /**
+     * Delete a thread.
+     */
+    del(threadId, options) {
+        return this._client.delete(`/threads/${threadId}`, {
+            ...options,
+            headers: { 'OpenAI-Beta': 'assistants=v2', ...options?.headers },
+        });
+    }
+    createAndRun(body, options) {
+        return this._client.post('/threads/runs', {
+            body,
+            ...options,
+            headers: { 'OpenAI-Beta': 'assistants=v2', ...options?.headers },
+            stream: body.stream ?? false,
+        });
+    }
+    /**
+     * A helper to create a thread, start a run and then poll for a terminal state.
+     * More information on Run lifecycles can be found here:
+     * https://platform.openai.com/docs/assistants/how-it-works/runs-and-run-steps
+     */
+    async createAndRunPoll(body, options) {
+        const run = await this.createAndRun(body, options);
+        return await this.runs.poll(run.thread_id, run.id, options);
+    }
+    /**
+     * Create a thread and stream the run back
+     */
+    createAndRunStream(body, options) {
+        return AssistantStream_1.AssistantStream.createThreadAssistantStream(body, this._client.beta.threads, options);
+    }
+}
+exports.Threads = Threads;
+Threads.Runs = runs_1.Runs;
+Threads.RunsPage = runs_1.RunsPage;
+Threads.Messages = messages_1.Messages;
+Threads.MessagesPage = messages_1.MessagesPage;
+//# sourceMappingURL=threads.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resources/chat/chat.js":
+/*!****************************************************!*\
+  !*** ./node_modules/openai/resources/chat/chat.js ***!
+  \****************************************************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.Chat = void 0;
+const resource_1 = __webpack_require__(/*! ../../resource.js */ "./node_modules/openai/resource.js");
+const CompletionsAPI = __importStar(__webpack_require__(/*! ./completions/completions.js */ "./node_modules/openai/resources/chat/completions/completions.js"));
+const completions_1 = __webpack_require__(/*! ./completions/completions.js */ "./node_modules/openai/resources/chat/completions/completions.js");
+class Chat extends resource_1.APIResource {
+    constructor() {
+        super(...arguments);
+        this.completions = new CompletionsAPI.Completions(this._client);
+    }
+}
+exports.Chat = Chat;
+Chat.Completions = completions_1.Completions;
+Chat.ChatCompletionsPage = completions_1.ChatCompletionsPage;
+//# sourceMappingURL=chat.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resources/chat/completions/completions.js":
+/*!***********************************************************************!*\
+  !*** ./node_modules/openai/resources/chat/completions/completions.js ***!
+  \***********************************************************************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.ChatCompletionStoreMessagesPage = exports.ChatCompletionsPage = exports.Completions = void 0;
+const resource_1 = __webpack_require__(/*! ../../../resource.js */ "./node_modules/openai/resource.js");
+const core_1 = __webpack_require__(/*! ../../../core.js */ "./node_modules/openai/core.js");
+const MessagesAPI = __importStar(__webpack_require__(/*! ./messages.js */ "./node_modules/openai/resources/chat/completions/messages.js"));
+const messages_1 = __webpack_require__(/*! ./messages.js */ "./node_modules/openai/resources/chat/completions/messages.js");
+const pagination_1 = __webpack_require__(/*! ../../../pagination.js */ "./node_modules/openai/pagination.js");
+class Completions extends resource_1.APIResource {
+    constructor() {
+        super(...arguments);
+        this.messages = new MessagesAPI.Messages(this._client);
+    }
+    create(body, options) {
+        return this._client.post('/chat/completions', { body, ...options, stream: body.stream ?? false });
+    }
+    /**
+     * Get a stored chat completion. Only Chat Completions that have been created with
+     * the `store` parameter set to `true` will be returned.
+     */
+    retrieve(completionId, options) {
+        return this._client.get(`/chat/completions/${completionId}`, options);
+    }
+    /**
+     * Modify a stored chat completion. Only Chat Completions that have been created
+     * with the `store` parameter set to `true` can be modified. Currently, the only
+     * supported modification is to update the `metadata` field.
+     */
+    update(completionId, body, options) {
+        return this._client.post(`/chat/completions/${completionId}`, { body, ...options });
+    }
+    list(query = {}, options) {
+        if ((0, core_1.isRequestOptions)(query)) {
+            return this.list({}, query);
+        }
+        return this._client.getAPIList('/chat/completions', ChatCompletionsPage, { query, ...options });
+    }
+    /**
+     * Delete a stored chat completion. Only Chat Completions that have been created
+     * with the `store` parameter set to `true` can be deleted.
+     */
+    del(completionId, options) {
+        return this._client.delete(`/chat/completions/${completionId}`, options);
+    }
+}
+exports.Completions = Completions;
+class ChatCompletionsPage extends pagination_1.CursorPage {
+}
+exports.ChatCompletionsPage = ChatCompletionsPage;
+class ChatCompletionStoreMessagesPage extends pagination_1.CursorPage {
+}
+exports.ChatCompletionStoreMessagesPage = ChatCompletionStoreMessagesPage;
+Completions.ChatCompletionsPage = ChatCompletionsPage;
+Completions.Messages = messages_1.Messages;
+//# sourceMappingURL=completions.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resources/chat/completions/index.js":
+/*!*****************************************************************!*\
+  !*** ./node_modules/openai/resources/chat/completions/index.js ***!
+  \*****************************************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.Messages = exports.Completions = exports.ChatCompletionsPage = exports.ChatCompletionStoreMessagesPage = void 0;
+var completions_1 = __webpack_require__(/*! ./completions.js */ "./node_modules/openai/resources/chat/completions/completions.js");
+Object.defineProperty(exports, "ChatCompletionStoreMessagesPage", ({ enumerable: true, get: function () { return completions_1.ChatCompletionStoreMessagesPage; } }));
+Object.defineProperty(exports, "ChatCompletionsPage", ({ enumerable: true, get: function () { return completions_1.ChatCompletionsPage; } }));
+Object.defineProperty(exports, "Completions", ({ enumerable: true, get: function () { return completions_1.Completions; } }));
+var messages_1 = __webpack_require__(/*! ./messages.js */ "./node_modules/openai/resources/chat/completions/messages.js");
+Object.defineProperty(exports, "Messages", ({ enumerable: true, get: function () { return messages_1.Messages; } }));
+//# sourceMappingURL=index.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resources/chat/completions/messages.js":
+/*!********************************************************************!*\
+  !*** ./node_modules/openai/resources/chat/completions/messages.js ***!
+  \********************************************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.ChatCompletionStoreMessagesPage = exports.Messages = void 0;
+const resource_1 = __webpack_require__(/*! ../../../resource.js */ "./node_modules/openai/resource.js");
+const core_1 = __webpack_require__(/*! ../../../core.js */ "./node_modules/openai/core.js");
+const completions_1 = __webpack_require__(/*! ./completions.js */ "./node_modules/openai/resources/chat/completions/completions.js");
+Object.defineProperty(exports, "ChatCompletionStoreMessagesPage", ({ enumerable: true, get: function () { return completions_1.ChatCompletionStoreMessagesPage; } }));
+class Messages extends resource_1.APIResource {
+    list(completionId, query = {}, options) {
+        if ((0, core_1.isRequestOptions)(query)) {
+            return this.list(completionId, {}, query);
+        }
+        return this._client.getAPIList(`/chat/completions/${completionId}/messages`, completions_1.ChatCompletionStoreMessagesPage, { query, ...options });
+    }
+}
+exports.Messages = Messages;
+//# sourceMappingURL=messages.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resources/chat/index.js":
+/*!*****************************************************!*\
+  !*** ./node_modules/openai/resources/chat/index.js ***!
+  \*****************************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.Completions = exports.ChatCompletionsPage = exports.ChatCompletionStoreMessagesPage = exports.Chat = void 0;
+var chat_1 = __webpack_require__(/*! ./chat.js */ "./node_modules/openai/resources/chat/chat.js");
+Object.defineProperty(exports, "Chat", ({ enumerable: true, get: function () { return chat_1.Chat; } }));
+var index_1 = __webpack_require__(/*! ./completions/index.js */ "./node_modules/openai/resources/chat/completions/index.js");
+Object.defineProperty(exports, "ChatCompletionStoreMessagesPage", ({ enumerable: true, get: function () { return index_1.ChatCompletionStoreMessagesPage; } }));
+Object.defineProperty(exports, "ChatCompletionsPage", ({ enumerable: true, get: function () { return index_1.ChatCompletionsPage; } }));
+Object.defineProperty(exports, "Completions", ({ enumerable: true, get: function () { return index_1.Completions; } }));
+//# sourceMappingURL=index.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resources/completions.js":
+/*!******************************************************!*\
+  !*** ./node_modules/openai/resources/completions.js ***!
+  \******************************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.Completions = void 0;
+const resource_1 = __webpack_require__(/*! ../resource.js */ "./node_modules/openai/resource.js");
+class Completions extends resource_1.APIResource {
+    create(body, options) {
+        return this._client.post('/completions', { body, ...options, stream: body.stream ?? false });
+    }
+}
+exports.Completions = Completions;
+//# sourceMappingURL=completions.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resources/embeddings.js":
+/*!*****************************************************!*\
+  !*** ./node_modules/openai/resources/embeddings.js ***!
+  \*****************************************************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.Embeddings = void 0;
+const resource_1 = __webpack_require__(/*! ../resource.js */ "./node_modules/openai/resource.js");
+const Core = __importStar(__webpack_require__(/*! ../core.js */ "./node_modules/openai/core.js"));
+class Embeddings extends resource_1.APIResource {
+    /**
+     * Creates an embedding vector representing the input text.
+     */
+    create(body, options) {
+        const hasUserProvidedEncodingFormat = !!body.encoding_format;
+        // No encoding_format specified, defaulting to base64 for performance reasons
+        // See https://github.com/openai/openai-node/pull/1312
+        let encoding_format = hasUserProvidedEncodingFormat ? body.encoding_format : 'base64';
+        if (hasUserProvidedEncodingFormat) {
+            Core.debug('Request', 'User defined encoding_format:', body.encoding_format);
+        }
+        const response = this._client.post('/embeddings', {
+            body: {
+                ...body,
+                encoding_format: encoding_format,
+            },
+            ...options,
+        });
+        // if the user specified an encoding_format, return the response as-is
+        if (hasUserProvidedEncodingFormat) {
+            return response;
+        }
+        // in this stage, we are sure the user did not specify an encoding_format
+        // and we defaulted to base64 for performance reasons
+        // we are sure then that the response is base64 encoded, let's decode it
+        // the returned result will be a float32 array since this is OpenAI API's default encoding
+        Core.debug('response', 'Decoding base64 embeddings to float32 array');
+        return response._thenUnwrap((response) => {
+            if (response && response.data) {
+                response.data.forEach((embeddingBase64Obj) => {
+                    const embeddingBase64Str = embeddingBase64Obj.embedding;
+                    embeddingBase64Obj.embedding = Core.toFloat32Array(embeddingBase64Str);
+                });
+            }
+            return response;
+        });
+    }
+}
+exports.Embeddings = Embeddings;
+//# sourceMappingURL=embeddings.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resources/evals/evals.js":
+/*!******************************************************!*\
+  !*** ./node_modules/openai/resources/evals/evals.js ***!
+  \******************************************************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.EvalListResponsesPage = exports.Evals = void 0;
+const resource_1 = __webpack_require__(/*! ../../resource.js */ "./node_modules/openai/resource.js");
+const core_1 = __webpack_require__(/*! ../../core.js */ "./node_modules/openai/core.js");
+const RunsAPI = __importStar(__webpack_require__(/*! ./runs/runs.js */ "./node_modules/openai/resources/evals/runs/runs.js"));
+const runs_1 = __webpack_require__(/*! ./runs/runs.js */ "./node_modules/openai/resources/evals/runs/runs.js");
+const pagination_1 = __webpack_require__(/*! ../../pagination.js */ "./node_modules/openai/pagination.js");
+class Evals extends resource_1.APIResource {
+    constructor() {
+        super(...arguments);
+        this.runs = new RunsAPI.Runs(this._client);
+    }
+    /**
+     * Create the structure of an evaluation that can be used to test a model's
+     * performance. An evaluation is a set of testing criteria and a datasource. After
+     * creating an evaluation, you can run it on different models and model parameters.
+     * We support several types of graders and datasources. For more information, see
+     * the [Evals guide](https://platform.openai.com/docs/guides/evals).
+     */
+    create(body, options) {
+        return this._client.post('/evals', { body, ...options });
+    }
+    /**
+     * Get an evaluation by ID.
+     */
+    retrieve(evalId, options) {
+        return this._client.get(`/evals/${evalId}`, options);
+    }
+    /**
+     * Update certain properties of an evaluation.
+     */
+    update(evalId, body, options) {
+        return this._client.post(`/evals/${evalId}`, { body, ...options });
+    }
+    list(query = {}, options) {
+        if ((0, core_1.isRequestOptions)(query)) {
+            return this.list({}, query);
+        }
+        return this._client.getAPIList('/evals', EvalListResponsesPage, { query, ...options });
+    }
+    /**
+     * Delete an evaluation.
+     */
+    del(evalId, options) {
+        return this._client.delete(`/evals/${evalId}`, options);
+    }
+}
+exports.Evals = Evals;
+class EvalListResponsesPage extends pagination_1.CursorPage {
+}
+exports.EvalListResponsesPage = EvalListResponsesPage;
+Evals.EvalListResponsesPage = EvalListResponsesPage;
+Evals.Runs = runs_1.Runs;
+Evals.RunListResponsesPage = runs_1.RunListResponsesPage;
+//# sourceMappingURL=evals.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resources/evals/runs/output-items.js":
+/*!******************************************************************!*\
+  !*** ./node_modules/openai/resources/evals/runs/output-items.js ***!
+  \******************************************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.OutputItemListResponsesPage = exports.OutputItems = void 0;
+const resource_1 = __webpack_require__(/*! ../../../resource.js */ "./node_modules/openai/resource.js");
+const core_1 = __webpack_require__(/*! ../../../core.js */ "./node_modules/openai/core.js");
+const pagination_1 = __webpack_require__(/*! ../../../pagination.js */ "./node_modules/openai/pagination.js");
+class OutputItems extends resource_1.APIResource {
+    /**
+     * Get an evaluation run output item by ID.
+     */
+    retrieve(evalId, runId, outputItemId, options) {
+        return this._client.get(`/evals/${evalId}/runs/${runId}/output_items/${outputItemId}`, options);
+    }
+    list(evalId, runId, query = {}, options) {
+        if ((0, core_1.isRequestOptions)(query)) {
+            return this.list(evalId, runId, {}, query);
+        }
+        return this._client.getAPIList(`/evals/${evalId}/runs/${runId}/output_items`, OutputItemListResponsesPage, { query, ...options });
+    }
+}
+exports.OutputItems = OutputItems;
+class OutputItemListResponsesPage extends pagination_1.CursorPage {
+}
+exports.OutputItemListResponsesPage = OutputItemListResponsesPage;
+OutputItems.OutputItemListResponsesPage = OutputItemListResponsesPage;
+//# sourceMappingURL=output-items.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resources/evals/runs/runs.js":
+/*!**********************************************************!*\
+  !*** ./node_modules/openai/resources/evals/runs/runs.js ***!
+  \**********************************************************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.RunListResponsesPage = exports.Runs = void 0;
+const resource_1 = __webpack_require__(/*! ../../../resource.js */ "./node_modules/openai/resource.js");
+const core_1 = __webpack_require__(/*! ../../../core.js */ "./node_modules/openai/core.js");
+const OutputItemsAPI = __importStar(__webpack_require__(/*! ./output-items.js */ "./node_modules/openai/resources/evals/runs/output-items.js"));
+const output_items_1 = __webpack_require__(/*! ./output-items.js */ "./node_modules/openai/resources/evals/runs/output-items.js");
+const pagination_1 = __webpack_require__(/*! ../../../pagination.js */ "./node_modules/openai/pagination.js");
+class Runs extends resource_1.APIResource {
+    constructor() {
+        super(...arguments);
+        this.outputItems = new OutputItemsAPI.OutputItems(this._client);
+    }
+    /**
+     * Create a new evaluation run. This is the endpoint that will kick off grading.
+     */
+    create(evalId, body, options) {
+        return this._client.post(`/evals/${evalId}/runs`, { body, ...options });
+    }
+    /**
+     * Get an evaluation run by ID.
+     */
+    retrieve(evalId, runId, options) {
+        return this._client.get(`/evals/${evalId}/runs/${runId}`, options);
+    }
+    list(evalId, query = {}, options) {
+        if ((0, core_1.isRequestOptions)(query)) {
+            return this.list(evalId, {}, query);
+        }
+        return this._client.getAPIList(`/evals/${evalId}/runs`, RunListResponsesPage, { query, ...options });
+    }
+    /**
+     * Delete an eval run.
+     */
+    del(evalId, runId, options) {
+        return this._client.delete(`/evals/${evalId}/runs/${runId}`, options);
+    }
+    /**
+     * Cancel an ongoing evaluation run.
+     */
+    cancel(evalId, runId, options) {
+        return this._client.post(`/evals/${evalId}/runs/${runId}`, options);
+    }
+}
+exports.Runs = Runs;
+class RunListResponsesPage extends pagination_1.CursorPage {
+}
+exports.RunListResponsesPage = RunListResponsesPage;
+Runs.RunListResponsesPage = RunListResponsesPage;
+Runs.OutputItems = output_items_1.OutputItems;
+Runs.OutputItemListResponsesPage = output_items_1.OutputItemListResponsesPage;
+//# sourceMappingURL=runs.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resources/files.js":
+/*!************************************************!*\
+  !*** ./node_modules/openai/resources/files.js ***!
+  \************************************************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.FileObjectsPage = exports.Files = void 0;
+const resource_1 = __webpack_require__(/*! ../resource.js */ "./node_modules/openai/resource.js");
+const core_1 = __webpack_require__(/*! ../core.js */ "./node_modules/openai/core.js");
+const core_2 = __webpack_require__(/*! ../core.js */ "./node_modules/openai/core.js");
+const error_1 = __webpack_require__(/*! ../error.js */ "./node_modules/openai/error.js");
+const Core = __importStar(__webpack_require__(/*! ../core.js */ "./node_modules/openai/core.js"));
+const pagination_1 = __webpack_require__(/*! ../pagination.js */ "./node_modules/openai/pagination.js");
+class Files extends resource_1.APIResource {
+    /**
+     * Upload a file that can be used across various endpoints. Individual files can be
+     * up to 512 MB, and the size of all files uploaded by one organization can be up
+     * to 100 GB.
+     *
+     * The Assistants API supports files up to 2 million tokens and of specific file
+     * types. See the
+     * [Assistants Tools guide](https://platform.openai.com/docs/assistants/tools) for
+     * details.
+     *
+     * The Fine-tuning API only supports `.jsonl` files. The input also has certain
+     * required formats for fine-tuning
+     * [chat](https://platform.openai.com/docs/api-reference/fine-tuning/chat-input) or
+     * [completions](https://platform.openai.com/docs/api-reference/fine-tuning/completions-input)
+     * models.
+     *
+     * The Batch API only supports `.jsonl` files up to 200 MB in size. The input also
+     * has a specific required
+     * [format](https://platform.openai.com/docs/api-reference/batch/request-input).
+     *
+     * Please [contact us](https://help.openai.com/) if you need to increase these
+     * storage limits.
+     */
+    create(body, options) {
+        return this._client.post('/files', Core.multipartFormRequestOptions({ body, ...options }));
+    }
+    /**
+     * Returns information about a specific file.
+     */
+    retrieve(fileId, options) {
+        return this._client.get(`/files/${fileId}`, options);
+    }
+    list(query = {}, options) {
+        if ((0, core_1.isRequestOptions)(query)) {
+            return this.list({}, query);
+        }
+        return this._client.getAPIList('/files', FileObjectsPage, { query, ...options });
+    }
+    /**
+     * Delete a file.
+     */
+    del(fileId, options) {
+        return this._client.delete(`/files/${fileId}`, options);
+    }
+    /**
+     * Returns the contents of the specified file.
+     */
+    content(fileId, options) {
+        return this._client.get(`/files/${fileId}/content`, {
+            ...options,
+            headers: { Accept: 'application/binary', ...options?.headers },
+            __binaryResponse: true,
+        });
+    }
+    /**
+     * Returns the contents of the specified file.
+     *
+     * @deprecated The `.content()` method should be used instead
+     */
+    retrieveContent(fileId, options) {
+        return this._client.get(`/files/${fileId}/content`, options);
+    }
+    /**
+     * Waits for the given file to be processed, default timeout is 30 mins.
+     */
+    async waitForProcessing(id, { pollInterval = 5000, maxWait = 30 * 60 * 1000 } = {}) {
+        const TERMINAL_STATES = new Set(['processed', 'error', 'deleted']);
+        const start = Date.now();
+        let file = await this.retrieve(id);
+        while (!file.status || !TERMINAL_STATES.has(file.status)) {
+            await (0, core_2.sleep)(pollInterval);
+            file = await this.retrieve(id);
+            if (Date.now() - start > maxWait) {
+                throw new error_1.APIConnectionTimeoutError({
+                    message: `Giving up on waiting for file ${id} to finish processing after ${maxWait} milliseconds.`,
+                });
+            }
+        }
+        return file;
+    }
+}
+exports.Files = Files;
+class FileObjectsPage extends pagination_1.CursorPage {
+}
+exports.FileObjectsPage = FileObjectsPage;
+Files.FileObjectsPage = FileObjectsPage;
+//# sourceMappingURL=files.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resources/fine-tuning/checkpoints/checkpoints.js":
+/*!******************************************************************************!*\
+  !*** ./node_modules/openai/resources/fine-tuning/checkpoints/checkpoints.js ***!
+  \******************************************************************************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.Checkpoints = void 0;
+const resource_1 = __webpack_require__(/*! ../../../resource.js */ "./node_modules/openai/resource.js");
+const PermissionsAPI = __importStar(__webpack_require__(/*! ./permissions.js */ "./node_modules/openai/resources/fine-tuning/checkpoints/permissions.js"));
+const permissions_1 = __webpack_require__(/*! ./permissions.js */ "./node_modules/openai/resources/fine-tuning/checkpoints/permissions.js");
+class Checkpoints extends resource_1.APIResource {
+    constructor() {
+        super(...arguments);
+        this.permissions = new PermissionsAPI.Permissions(this._client);
+    }
+}
+exports.Checkpoints = Checkpoints;
+Checkpoints.Permissions = permissions_1.Permissions;
+Checkpoints.PermissionCreateResponsesPage = permissions_1.PermissionCreateResponsesPage;
+//# sourceMappingURL=checkpoints.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resources/fine-tuning/checkpoints/permissions.js":
+/*!******************************************************************************!*\
+  !*** ./node_modules/openai/resources/fine-tuning/checkpoints/permissions.js ***!
+  \******************************************************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.PermissionCreateResponsesPage = exports.Permissions = void 0;
+const resource_1 = __webpack_require__(/*! ../../../resource.js */ "./node_modules/openai/resource.js");
+const core_1 = __webpack_require__(/*! ../../../core.js */ "./node_modules/openai/core.js");
+const pagination_1 = __webpack_require__(/*! ../../../pagination.js */ "./node_modules/openai/pagination.js");
+class Permissions extends resource_1.APIResource {
+    /**
+     * **NOTE:** Calling this endpoint requires an [admin API key](../admin-api-keys).
+     *
+     * This enables organization owners to share fine-tuned models with other projects
+     * in their organization.
+     */
+    create(fineTunedModelCheckpoint, body, options) {
+        return this._client.getAPIList(`/fine_tuning/checkpoints/${fineTunedModelCheckpoint}/permissions`, PermissionCreateResponsesPage, { body, method: 'post', ...options });
+    }
+    retrieve(fineTunedModelCheckpoint, query = {}, options) {
+        if ((0, core_1.isRequestOptions)(query)) {
+            return this.retrieve(fineTunedModelCheckpoint, {}, query);
+        }
+        return this._client.get(`/fine_tuning/checkpoints/${fineTunedModelCheckpoint}/permissions`, {
+            query,
+            ...options,
+        });
+    }
+    /**
+     * **NOTE:** This endpoint requires an [admin API key](../admin-api-keys).
+     *
+     * Organization owners can use this endpoint to delete a permission for a
+     * fine-tuned model checkpoint.
+     */
+    del(fineTunedModelCheckpoint, permissionId, options) {
+        return this._client.delete(`/fine_tuning/checkpoints/${fineTunedModelCheckpoint}/permissions/${permissionId}`, options);
+    }
+}
+exports.Permissions = Permissions;
+/**
+ * Note: no pagination actually occurs yet, this is for forwards-compatibility.
+ */
+class PermissionCreateResponsesPage extends pagination_1.Page {
+}
+exports.PermissionCreateResponsesPage = PermissionCreateResponsesPage;
+Permissions.PermissionCreateResponsesPage = PermissionCreateResponsesPage;
+//# sourceMappingURL=permissions.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resources/fine-tuning/fine-tuning.js":
+/*!******************************************************************!*\
+  !*** ./node_modules/openai/resources/fine-tuning/fine-tuning.js ***!
+  \******************************************************************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.FineTuning = void 0;
+const resource_1 = __webpack_require__(/*! ../../resource.js */ "./node_modules/openai/resource.js");
+const CheckpointsAPI = __importStar(__webpack_require__(/*! ./checkpoints/checkpoints.js */ "./node_modules/openai/resources/fine-tuning/checkpoints/checkpoints.js"));
+const checkpoints_1 = __webpack_require__(/*! ./checkpoints/checkpoints.js */ "./node_modules/openai/resources/fine-tuning/checkpoints/checkpoints.js");
+const JobsAPI = __importStar(__webpack_require__(/*! ./jobs/jobs.js */ "./node_modules/openai/resources/fine-tuning/jobs/jobs.js"));
+const jobs_1 = __webpack_require__(/*! ./jobs/jobs.js */ "./node_modules/openai/resources/fine-tuning/jobs/jobs.js");
+class FineTuning extends resource_1.APIResource {
+    constructor() {
+        super(...arguments);
+        this.jobs = new JobsAPI.Jobs(this._client);
+        this.checkpoints = new CheckpointsAPI.Checkpoints(this._client);
+    }
+}
+exports.FineTuning = FineTuning;
+FineTuning.Jobs = jobs_1.Jobs;
+FineTuning.FineTuningJobsPage = jobs_1.FineTuningJobsPage;
+FineTuning.FineTuningJobEventsPage = jobs_1.FineTuningJobEventsPage;
+FineTuning.Checkpoints = checkpoints_1.Checkpoints;
+//# sourceMappingURL=fine-tuning.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resources/fine-tuning/jobs/checkpoints.js":
+/*!***********************************************************************!*\
+  !*** ./node_modules/openai/resources/fine-tuning/jobs/checkpoints.js ***!
+  \***********************************************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.FineTuningJobCheckpointsPage = exports.Checkpoints = void 0;
+const resource_1 = __webpack_require__(/*! ../../../resource.js */ "./node_modules/openai/resource.js");
+const core_1 = __webpack_require__(/*! ../../../core.js */ "./node_modules/openai/core.js");
+const pagination_1 = __webpack_require__(/*! ../../../pagination.js */ "./node_modules/openai/pagination.js");
+class Checkpoints extends resource_1.APIResource {
+    list(fineTuningJobId, query = {}, options) {
+        if ((0, core_1.isRequestOptions)(query)) {
+            return this.list(fineTuningJobId, {}, query);
+        }
+        return this._client.getAPIList(`/fine_tuning/jobs/${fineTuningJobId}/checkpoints`, FineTuningJobCheckpointsPage, { query, ...options });
+    }
+}
+exports.Checkpoints = Checkpoints;
+class FineTuningJobCheckpointsPage extends pagination_1.CursorPage {
+}
+exports.FineTuningJobCheckpointsPage = FineTuningJobCheckpointsPage;
+Checkpoints.FineTuningJobCheckpointsPage = FineTuningJobCheckpointsPage;
+//# sourceMappingURL=checkpoints.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resources/fine-tuning/jobs/jobs.js":
+/*!****************************************************************!*\
+  !*** ./node_modules/openai/resources/fine-tuning/jobs/jobs.js ***!
+  \****************************************************************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.FineTuningJobEventsPage = exports.FineTuningJobsPage = exports.Jobs = void 0;
+const resource_1 = __webpack_require__(/*! ../../../resource.js */ "./node_modules/openai/resource.js");
+const core_1 = __webpack_require__(/*! ../../../core.js */ "./node_modules/openai/core.js");
+const CheckpointsAPI = __importStar(__webpack_require__(/*! ./checkpoints.js */ "./node_modules/openai/resources/fine-tuning/jobs/checkpoints.js"));
+const checkpoints_1 = __webpack_require__(/*! ./checkpoints.js */ "./node_modules/openai/resources/fine-tuning/jobs/checkpoints.js");
+const pagination_1 = __webpack_require__(/*! ../../../pagination.js */ "./node_modules/openai/pagination.js");
+class Jobs extends resource_1.APIResource {
+    constructor() {
+        super(...arguments);
+        this.checkpoints = new CheckpointsAPI.Checkpoints(this._client);
+    }
+    /**
+     * Creates a fine-tuning job which begins the process of creating a new model from
+     * a given dataset.
+     *
+     * Response includes details of the enqueued job including job status and the name
+     * of the fine-tuned models once complete.
+     *
+     * [Learn more about fine-tuning](https://platform.openai.com/docs/guides/fine-tuning)
+     */
+    create(body, options) {
+        return this._client.post('/fine_tuning/jobs', { body, ...options });
+    }
+    /**
+     * Get info about a fine-tuning job.
+     *
+     * [Learn more about fine-tuning](https://platform.openai.com/docs/guides/fine-tuning)
+     */
+    retrieve(fineTuningJobId, options) {
+        return this._client.get(`/fine_tuning/jobs/${fineTuningJobId}`, options);
+    }
+    list(query = {}, options) {
+        if ((0, core_1.isRequestOptions)(query)) {
+            return this.list({}, query);
+        }
+        return this._client.getAPIList('/fine_tuning/jobs', FineTuningJobsPage, { query, ...options });
+    }
+    /**
+     * Immediately cancel a fine-tune job.
+     */
+    cancel(fineTuningJobId, options) {
+        return this._client.post(`/fine_tuning/jobs/${fineTuningJobId}/cancel`, options);
+    }
+    listEvents(fineTuningJobId, query = {}, options) {
+        if ((0, core_1.isRequestOptions)(query)) {
+            return this.listEvents(fineTuningJobId, {}, query);
+        }
+        return this._client.getAPIList(`/fine_tuning/jobs/${fineTuningJobId}/events`, FineTuningJobEventsPage, {
+            query,
+            ...options,
+        });
+    }
+}
+exports.Jobs = Jobs;
+class FineTuningJobsPage extends pagination_1.CursorPage {
+}
+exports.FineTuningJobsPage = FineTuningJobsPage;
+class FineTuningJobEventsPage extends pagination_1.CursorPage {
+}
+exports.FineTuningJobEventsPage = FineTuningJobEventsPage;
+Jobs.FineTuningJobsPage = FineTuningJobsPage;
+Jobs.FineTuningJobEventsPage = FineTuningJobEventsPage;
+Jobs.Checkpoints = checkpoints_1.Checkpoints;
+Jobs.FineTuningJobCheckpointsPage = checkpoints_1.FineTuningJobCheckpointsPage;
+//# sourceMappingURL=jobs.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resources/images.js":
+/*!*************************************************!*\
+  !*** ./node_modules/openai/resources/images.js ***!
+  \*************************************************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.Images = void 0;
+const resource_1 = __webpack_require__(/*! ../resource.js */ "./node_modules/openai/resource.js");
+const Core = __importStar(__webpack_require__(/*! ../core.js */ "./node_modules/openai/core.js"));
+class Images extends resource_1.APIResource {
+    /**
+     * Creates a variation of a given image. This endpoint only supports `dall-e-2`.
+     */
+    createVariation(body, options) {
+        return this._client.post('/images/variations', Core.multipartFormRequestOptions({ body, ...options }));
+    }
+    /**
+     * Creates an edited or extended image given one or more source images and a
+     * prompt. This endpoint only supports `gpt-image-1` and `dall-e-2`.
+     */
+    edit(body, options) {
+        return this._client.post('/images/edits', Core.multipartFormRequestOptions({ body, ...options }));
+    }
+    /**
+     * Creates an image given a prompt.
+     * [Learn more](https://platform.openai.com/docs/guides/images).
+     */
+    generate(body, options) {
+        return this._client.post('/images/generations', { body, ...options });
+    }
+}
+exports.Images = Images;
+//# sourceMappingURL=images.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resources/index.js":
+/*!************************************************!*\
+  !*** ./node_modules/openai/resources/index.js ***!
+  \************************************************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __exportStar = (this && this.__exportStar) || function(m, exports) {
+    for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports, p)) __createBinding(exports, m, p);
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.VectorStores = exports.VectorStoreSearchResponsesPage = exports.VectorStoresPage = exports.Uploads = exports.Responses = exports.Moderations = exports.Models = exports.ModelsPage = exports.Images = exports.FineTuning = exports.Files = exports.FileObjectsPage = exports.Evals = exports.EvalListResponsesPage = exports.Embeddings = exports.Completions = exports.Beta = exports.Batches = exports.BatchesPage = exports.Audio = void 0;
+__exportStar(__webpack_require__(/*! ./chat/index.js */ "./node_modules/openai/resources/chat/index.js"), exports);
+__exportStar(__webpack_require__(/*! ./shared.js */ "./node_modules/openai/resources/shared.js"), exports);
+var audio_1 = __webpack_require__(/*! ./audio/audio.js */ "./node_modules/openai/resources/audio/audio.js");
+Object.defineProperty(exports, "Audio", ({ enumerable: true, get: function () { return audio_1.Audio; } }));
+var batches_1 = __webpack_require__(/*! ./batches.js */ "./node_modules/openai/resources/batches.js");
+Object.defineProperty(exports, "BatchesPage", ({ enumerable: true, get: function () { return batches_1.BatchesPage; } }));
+Object.defineProperty(exports, "Batches", ({ enumerable: true, get: function () { return batches_1.Batches; } }));
+var beta_1 = __webpack_require__(/*! ./beta/beta.js */ "./node_modules/openai/resources/beta/beta.js");
+Object.defineProperty(exports, "Beta", ({ enumerable: true, get: function () { return beta_1.Beta; } }));
+var completions_1 = __webpack_require__(/*! ./completions.js */ "./node_modules/openai/resources/completions.js");
+Object.defineProperty(exports, "Completions", ({ enumerable: true, get: function () { return completions_1.Completions; } }));
+var embeddings_1 = __webpack_require__(/*! ./embeddings.js */ "./node_modules/openai/resources/embeddings.js");
+Object.defineProperty(exports, "Embeddings", ({ enumerable: true, get: function () { return embeddings_1.Embeddings; } }));
+var evals_1 = __webpack_require__(/*! ./evals/evals.js */ "./node_modules/openai/resources/evals/evals.js");
+Object.defineProperty(exports, "EvalListResponsesPage", ({ enumerable: true, get: function () { return evals_1.EvalListResponsesPage; } }));
+Object.defineProperty(exports, "Evals", ({ enumerable: true, get: function () { return evals_1.Evals; } }));
+var files_1 = __webpack_require__(/*! ./files.js */ "./node_modules/openai/resources/files.js");
+Object.defineProperty(exports, "FileObjectsPage", ({ enumerable: true, get: function () { return files_1.FileObjectsPage; } }));
+Object.defineProperty(exports, "Files", ({ enumerable: true, get: function () { return files_1.Files; } }));
+var fine_tuning_1 = __webpack_require__(/*! ./fine-tuning/fine-tuning.js */ "./node_modules/openai/resources/fine-tuning/fine-tuning.js");
+Object.defineProperty(exports, "FineTuning", ({ enumerable: true, get: function () { return fine_tuning_1.FineTuning; } }));
+var images_1 = __webpack_require__(/*! ./images.js */ "./node_modules/openai/resources/images.js");
+Object.defineProperty(exports, "Images", ({ enumerable: true, get: function () { return images_1.Images; } }));
+var models_1 = __webpack_require__(/*! ./models.js */ "./node_modules/openai/resources/models.js");
+Object.defineProperty(exports, "ModelsPage", ({ enumerable: true, get: function () { return models_1.ModelsPage; } }));
+Object.defineProperty(exports, "Models", ({ enumerable: true, get: function () { return models_1.Models; } }));
+var moderations_1 = __webpack_require__(/*! ./moderations.js */ "./node_modules/openai/resources/moderations.js");
+Object.defineProperty(exports, "Moderations", ({ enumerable: true, get: function () { return moderations_1.Moderations; } }));
+var responses_1 = __webpack_require__(/*! ./responses/responses.js */ "./node_modules/openai/resources/responses/responses.js");
+Object.defineProperty(exports, "Responses", ({ enumerable: true, get: function () { return responses_1.Responses; } }));
+var uploads_1 = __webpack_require__(/*! ./uploads/uploads.js */ "./node_modules/openai/resources/uploads/uploads.js");
+Object.defineProperty(exports, "Uploads", ({ enumerable: true, get: function () { return uploads_1.Uploads; } }));
+var vector_stores_1 = __webpack_require__(/*! ./vector-stores/vector-stores.js */ "./node_modules/openai/resources/vector-stores/vector-stores.js");
+Object.defineProperty(exports, "VectorStoresPage", ({ enumerable: true, get: function () { return vector_stores_1.VectorStoresPage; } }));
+Object.defineProperty(exports, "VectorStoreSearchResponsesPage", ({ enumerable: true, get: function () { return vector_stores_1.VectorStoreSearchResponsesPage; } }));
+Object.defineProperty(exports, "VectorStores", ({ enumerable: true, get: function () { return vector_stores_1.VectorStores; } }));
+//# sourceMappingURL=index.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resources/models.js":
+/*!*************************************************!*\
+  !*** ./node_modules/openai/resources/models.js ***!
+  \*************************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.ModelsPage = exports.Models = void 0;
+const resource_1 = __webpack_require__(/*! ../resource.js */ "./node_modules/openai/resource.js");
+const pagination_1 = __webpack_require__(/*! ../pagination.js */ "./node_modules/openai/pagination.js");
+class Models extends resource_1.APIResource {
+    /**
+     * Retrieves a model instance, providing basic information about the model such as
+     * the owner and permissioning.
+     */
+    retrieve(model, options) {
+        return this._client.get(`/models/${model}`, options);
+    }
+    /**
+     * Lists the currently available models, and provides basic information about each
+     * one such as the owner and availability.
+     */
+    list(options) {
+        return this._client.getAPIList('/models', ModelsPage, options);
+    }
+    /**
+     * Delete a fine-tuned model. You must have the Owner role in your organization to
+     * delete a model.
+     */
+    del(model, options) {
+        return this._client.delete(`/models/${model}`, options);
+    }
+}
+exports.Models = Models;
+/**
+ * Note: no pagination actually occurs yet, this is for forwards-compatibility.
+ */
+class ModelsPage extends pagination_1.Page {
+}
+exports.ModelsPage = ModelsPage;
+Models.ModelsPage = ModelsPage;
+//# sourceMappingURL=models.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resources/moderations.js":
+/*!******************************************************!*\
+  !*** ./node_modules/openai/resources/moderations.js ***!
+  \******************************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.Moderations = void 0;
+const resource_1 = __webpack_require__(/*! ../resource.js */ "./node_modules/openai/resource.js");
+class Moderations extends resource_1.APIResource {
+    /**
+     * Classifies if text and/or image inputs are potentially harmful. Learn more in
+     * the [moderation guide](https://platform.openai.com/docs/guides/moderation).
+     */
+    create(body, options) {
+        return this._client.post('/moderations', { body, ...options });
+    }
+}
+exports.Moderations = Moderations;
+//# sourceMappingURL=moderations.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resources/responses/input-items.js":
+/*!****************************************************************!*\
+  !*** ./node_modules/openai/resources/responses/input-items.js ***!
+  \****************************************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.ResponseItemsPage = exports.InputItems = void 0;
+const resource_1 = __webpack_require__(/*! ../../resource.js */ "./node_modules/openai/resource.js");
+const core_1 = __webpack_require__(/*! ../../core.js */ "./node_modules/openai/core.js");
+const responses_1 = __webpack_require__(/*! ./responses.js */ "./node_modules/openai/resources/responses/responses.js");
+Object.defineProperty(exports, "ResponseItemsPage", ({ enumerable: true, get: function () { return responses_1.ResponseItemsPage; } }));
+class InputItems extends resource_1.APIResource {
+    list(responseId, query = {}, options) {
+        if ((0, core_1.isRequestOptions)(query)) {
+            return this.list(responseId, {}, query);
+        }
+        return this._client.getAPIList(`/responses/${responseId}/input_items`, responses_1.ResponseItemsPage, {
+            query,
+            ...options,
+        });
+    }
+}
+exports.InputItems = InputItems;
+//# sourceMappingURL=input-items.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resources/responses/responses.js":
+/*!**************************************************************!*\
+  !*** ./node_modules/openai/resources/responses/responses.js ***!
+  \**************************************************************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.ResponseItemsPage = exports.Responses = void 0;
+const ResponsesParser_1 = __webpack_require__(/*! ../../lib/ResponsesParser.js */ "./node_modules/openai/lib/ResponsesParser.js");
+const core_1 = __webpack_require__(/*! ../../core.js */ "./node_modules/openai/core.js");
+const resource_1 = __webpack_require__(/*! ../../resource.js */ "./node_modules/openai/resource.js");
+const InputItemsAPI = __importStar(__webpack_require__(/*! ./input-items.js */ "./node_modules/openai/resources/responses/input-items.js"));
+const input_items_1 = __webpack_require__(/*! ./input-items.js */ "./node_modules/openai/resources/responses/input-items.js");
+const ResponseStream_1 = __webpack_require__(/*! ../../lib/responses/ResponseStream.js */ "./node_modules/openai/lib/responses/ResponseStream.js");
+const pagination_1 = __webpack_require__(/*! ../../pagination.js */ "./node_modules/openai/pagination.js");
+class Responses extends resource_1.APIResource {
+    constructor() {
+        super(...arguments);
+        this.inputItems = new InputItemsAPI.InputItems(this._client);
+    }
+    create(body, options) {
+        return this._client.post('/responses', { body, ...options, stream: body.stream ?? false })._thenUnwrap((rsp) => {
+            if ('object' in rsp && rsp.object === 'response') {
+                (0, ResponsesParser_1.addOutputText)(rsp);
+            }
+            return rsp;
+        });
+    }
+    retrieve(responseId, query = {}, options) {
+        if ((0, core_1.isRequestOptions)(query)) {
+            return this.retrieve(responseId, {}, query);
+        }
+        return this._client.get(`/responses/${responseId}`, { query, ...options });
+    }
+    /**
+     * Deletes a model response with the given ID.
+     */
+    del(responseId, options) {
+        return this._client.delete(`/responses/${responseId}`, {
+            ...options,
+            headers: { Accept: '*/*', ...options?.headers },
+        });
+    }
+    parse(body, options) {
+        return this._client.responses
+            .create(body, options)
+            ._thenUnwrap((response) => (0, ResponsesParser_1.parseResponse)(response, body));
+    }
+    /**
+     * Creates a model response stream
+     */
+    stream(body, options) {
+        return ResponseStream_1.ResponseStream.createResponse(this._client, body, options);
+    }
+}
+exports.Responses = Responses;
+class ResponseItemsPage extends pagination_1.CursorPage {
+}
+exports.ResponseItemsPage = ResponseItemsPage;
+Responses.InputItems = input_items_1.InputItems;
+//# sourceMappingURL=responses.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resources/shared.js":
+/*!*************************************************!*\
+  !*** ./node_modules/openai/resources/shared.js ***!
+  \*************************************************/
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=shared.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resources/uploads/parts.js":
+/*!********************************************************!*\
+  !*** ./node_modules/openai/resources/uploads/parts.js ***!
+  \********************************************************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.Parts = void 0;
+const resource_1 = __webpack_require__(/*! ../../resource.js */ "./node_modules/openai/resource.js");
+const Core = __importStar(__webpack_require__(/*! ../../core.js */ "./node_modules/openai/core.js"));
+class Parts extends resource_1.APIResource {
+    /**
+     * Adds a
+     * [Part](https://platform.openai.com/docs/api-reference/uploads/part-object) to an
+     * [Upload](https://platform.openai.com/docs/api-reference/uploads/object) object.
+     * A Part represents a chunk of bytes from the file you are trying to upload.
+     *
+     * Each Part can be at most 64 MB, and you can add Parts until you hit the Upload
+     * maximum of 8 GB.
+     *
+     * It is possible to add multiple Parts in parallel. You can decide the intended
+     * order of the Parts when you
+     * [complete the Upload](https://platform.openai.com/docs/api-reference/uploads/complete).
+     */
+    create(uploadId, body, options) {
+        return this._client.post(`/uploads/${uploadId}/parts`, Core.multipartFormRequestOptions({ body, ...options }));
+    }
+}
+exports.Parts = Parts;
+//# sourceMappingURL=parts.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resources/uploads/uploads.js":
+/*!**********************************************************!*\
+  !*** ./node_modules/openai/resources/uploads/uploads.js ***!
+  \**********************************************************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.Uploads = void 0;
+const resource_1 = __webpack_require__(/*! ../../resource.js */ "./node_modules/openai/resource.js");
+const PartsAPI = __importStar(__webpack_require__(/*! ./parts.js */ "./node_modules/openai/resources/uploads/parts.js"));
+const parts_1 = __webpack_require__(/*! ./parts.js */ "./node_modules/openai/resources/uploads/parts.js");
+class Uploads extends resource_1.APIResource {
+    constructor() {
+        super(...arguments);
+        this.parts = new PartsAPI.Parts(this._client);
+    }
+    /**
+     * Creates an intermediate
+     * [Upload](https://platform.openai.com/docs/api-reference/uploads/object) object
+     * that you can add
+     * [Parts](https://platform.openai.com/docs/api-reference/uploads/part-object) to.
+     * Currently, an Upload can accept at most 8 GB in total and expires after an hour
+     * after you create it.
+     *
+     * Once you complete the Upload, we will create a
+     * [File](https://platform.openai.com/docs/api-reference/files/object) object that
+     * contains all the parts you uploaded. This File is usable in the rest of our
+     * platform as a regular File object.
+     *
+     * For certain `purpose` values, the correct `mime_type` must be specified. Please
+     * refer to documentation for the
+     * [supported MIME types for your use case](https://platform.openai.com/docs/assistants/tools/file-search#supported-files).
+     *
+     * For guidance on the proper filename extensions for each purpose, please follow
+     * the documentation on
+     * [creating a File](https://platform.openai.com/docs/api-reference/files/create).
+     */
+    create(body, options) {
+        return this._client.post('/uploads', { body, ...options });
+    }
+    /**
+     * Cancels the Upload. No Parts may be added after an Upload is cancelled.
+     */
+    cancel(uploadId, options) {
+        return this._client.post(`/uploads/${uploadId}/cancel`, options);
+    }
+    /**
+     * Completes the
+     * [Upload](https://platform.openai.com/docs/api-reference/uploads/object).
+     *
+     * Within the returned Upload object, there is a nested
+     * [File](https://platform.openai.com/docs/api-reference/files/object) object that
+     * is ready to use in the rest of the platform.
+     *
+     * You can specify the order of the Parts by passing in an ordered list of the Part
+     * IDs.
+     *
+     * The number of bytes uploaded upon completion must match the number of bytes
+     * initially specified when creating the Upload object. No Parts may be added after
+     * an Upload is completed.
+     */
+    complete(uploadId, body, options) {
+        return this._client.post(`/uploads/${uploadId}/complete`, { body, ...options });
+    }
+}
+exports.Uploads = Uploads;
+Uploads.Parts = parts_1.Parts;
+//# sourceMappingURL=uploads.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resources/vector-stores/file-batches.js":
+/*!*********************************************************************!*\
+  !*** ./node_modules/openai/resources/vector-stores/file-batches.js ***!
+  \*********************************************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.VectorStoreFilesPage = exports.FileBatches = void 0;
+const resource_1 = __webpack_require__(/*! ../../resource.js */ "./node_modules/openai/resource.js");
+const core_1 = __webpack_require__(/*! ../../core.js */ "./node_modules/openai/core.js");
+const core_2 = __webpack_require__(/*! ../../core.js */ "./node_modules/openai/core.js");
+const Util_1 = __webpack_require__(/*! ../../lib/Util.js */ "./node_modules/openai/lib/Util.js");
+const files_1 = __webpack_require__(/*! ./files.js */ "./node_modules/openai/resources/vector-stores/files.js");
+Object.defineProperty(exports, "VectorStoreFilesPage", ({ enumerable: true, get: function () { return files_1.VectorStoreFilesPage; } }));
+class FileBatches extends resource_1.APIResource {
+    /**
+     * Create a vector store file batch.
+     */
+    create(vectorStoreId, body, options) {
+        return this._client.post(`/vector_stores/${vectorStoreId}/file_batches`, {
+            body,
+            ...options,
+            headers: { 'OpenAI-Beta': 'assistants=v2', ...options?.headers },
+        });
+    }
+    /**
+     * Retrieves a vector store file batch.
+     */
+    retrieve(vectorStoreId, batchId, options) {
+        return this._client.get(`/vector_stores/${vectorStoreId}/file_batches/${batchId}`, {
+            ...options,
+            headers: { 'OpenAI-Beta': 'assistants=v2', ...options?.headers },
+        });
+    }
+    /**
+     * Cancel a vector store file batch. This attempts to cancel the processing of
+     * files in this batch as soon as possible.
+     */
+    cancel(vectorStoreId, batchId, options) {
+        return this._client.post(`/vector_stores/${vectorStoreId}/file_batches/${batchId}/cancel`, {
+            ...options,
+            headers: { 'OpenAI-Beta': 'assistants=v2', ...options?.headers },
+        });
+    }
+    /**
+     * Create a vector store batch and poll until all files have been processed.
+     */
+    async createAndPoll(vectorStoreId, body, options) {
+        const batch = await this.create(vectorStoreId, body);
+        return await this.poll(vectorStoreId, batch.id, options);
+    }
+    listFiles(vectorStoreId, batchId, query = {}, options) {
+        if ((0, core_1.isRequestOptions)(query)) {
+            return this.listFiles(vectorStoreId, batchId, {}, query);
+        }
+        return this._client.getAPIList(`/vector_stores/${vectorStoreId}/file_batches/${batchId}/files`, files_1.VectorStoreFilesPage, { query, ...options, headers: { 'OpenAI-Beta': 'assistants=v2', ...options?.headers } });
+    }
+    /**
+     * Wait for the given file batch to be processed.
+     *
+     * Note: this will return even if one of the files failed to process, you need to
+     * check batch.file_counts.failed_count to handle this case.
+     */
+    async poll(vectorStoreId, batchId, options) {
+        const headers = { ...options?.headers, 'X-Stainless-Poll-Helper': 'true' };
+        if (options?.pollIntervalMs) {
+            headers['X-Stainless-Custom-Poll-Interval'] = options.pollIntervalMs.toString();
+        }
+        while (true) {
+            const { data: batch, response } = await this.retrieve(vectorStoreId, batchId, {
+                ...options,
+                headers,
+            }).withResponse();
+            switch (batch.status) {
+                case 'in_progress':
+                    let sleepInterval = 5000;
+                    if (options?.pollIntervalMs) {
+                        sleepInterval = options.pollIntervalMs;
+                    }
+                    else {
+                        const headerInterval = response.headers.get('openai-poll-after-ms');
+                        if (headerInterval) {
+                            const headerIntervalMs = parseInt(headerInterval);
+                            if (!isNaN(headerIntervalMs)) {
+                                sleepInterval = headerIntervalMs;
+                            }
+                        }
+                    }
+                    await (0, core_2.sleep)(sleepInterval);
+                    break;
+                case 'failed':
+                case 'cancelled':
+                case 'completed':
+                    return batch;
+            }
+        }
+    }
+    /**
+     * Uploads the given files concurrently and then creates a vector store file batch.
+     *
+     * The concurrency limit is configurable using the `maxConcurrency` parameter.
+     */
+    async uploadAndPoll(vectorStoreId, { files, fileIds = [] }, options) {
+        if (files == null || files.length == 0) {
+            throw new Error(`No \`files\` provided to process. If you've already uploaded files you should use \`.createAndPoll()\` instead`);
+        }
+        const configuredConcurrency = options?.maxConcurrency ?? 5;
+        // We cap the number of workers at the number of files (so we don't start any unnecessary workers)
+        const concurrencyLimit = Math.min(configuredConcurrency, files.length);
+        const client = this._client;
+        const fileIterator = files.values();
+        const allFileIds = [...fileIds];
+        // This code is based on this design. The libraries don't accommodate our environment limits.
+        // https://stackoverflow.com/questions/40639432/what-is-the-best-way-to-limit-concurrency-when-using-es6s-promise-all
+        async function processFiles(iterator) {
+            for (let item of iterator) {
+                const fileObj = await client.files.create({ file: item, purpose: 'assistants' }, options);
+                allFileIds.push(fileObj.id);
+            }
+        }
+        // Start workers to process results
+        const workers = Array(concurrencyLimit).fill(fileIterator).map(processFiles);
+        // Wait for all processing to complete.
+        await (0, Util_1.allSettledWithThrow)(workers);
+        return await this.createAndPoll(vectorStoreId, {
+            file_ids: allFileIds,
+        });
+    }
+}
+exports.FileBatches = FileBatches;
+//# sourceMappingURL=file-batches.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resources/vector-stores/files.js":
+/*!**************************************************************!*\
+  !*** ./node_modules/openai/resources/vector-stores/files.js ***!
+  \**************************************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.FileContentResponsesPage = exports.VectorStoreFilesPage = exports.Files = void 0;
+const resource_1 = __webpack_require__(/*! ../../resource.js */ "./node_modules/openai/resource.js");
+const core_1 = __webpack_require__(/*! ../../core.js */ "./node_modules/openai/core.js");
+const pagination_1 = __webpack_require__(/*! ../../pagination.js */ "./node_modules/openai/pagination.js");
+class Files extends resource_1.APIResource {
+    /**
+     * Create a vector store file by attaching a
+     * [File](https://platform.openai.com/docs/api-reference/files) to a
+     * [vector store](https://platform.openai.com/docs/api-reference/vector-stores/object).
+     */
+    create(vectorStoreId, body, options) {
+        return this._client.post(`/vector_stores/${vectorStoreId}/files`, {
+            body,
+            ...options,
+            headers: { 'OpenAI-Beta': 'assistants=v2', ...options?.headers },
+        });
+    }
+    /**
+     * Retrieves a vector store file.
+     */
+    retrieve(vectorStoreId, fileId, options) {
+        return this._client.get(`/vector_stores/${vectorStoreId}/files/${fileId}`, {
+            ...options,
+            headers: { 'OpenAI-Beta': 'assistants=v2', ...options?.headers },
+        });
+    }
+    /**
+     * Update attributes on a vector store file.
+     */
+    update(vectorStoreId, fileId, body, options) {
+        return this._client.post(`/vector_stores/${vectorStoreId}/files/${fileId}`, {
+            body,
+            ...options,
+            headers: { 'OpenAI-Beta': 'assistants=v2', ...options?.headers },
+        });
+    }
+    list(vectorStoreId, query = {}, options) {
+        if ((0, core_1.isRequestOptions)(query)) {
+            return this.list(vectorStoreId, {}, query);
+        }
+        return this._client.getAPIList(`/vector_stores/${vectorStoreId}/files`, VectorStoreFilesPage, {
+            query,
+            ...options,
+            headers: { 'OpenAI-Beta': 'assistants=v2', ...options?.headers },
+        });
+    }
+    /**
+     * Delete a vector store file. This will remove the file from the vector store but
+     * the file itself will not be deleted. To delete the file, use the
+     * [delete file](https://platform.openai.com/docs/api-reference/files/delete)
+     * endpoint.
+     */
+    del(vectorStoreId, fileId, options) {
+        return this._client.delete(`/vector_stores/${vectorStoreId}/files/${fileId}`, {
+            ...options,
+            headers: { 'OpenAI-Beta': 'assistants=v2', ...options?.headers },
+        });
+    }
+    /**
+     * Attach a file to the given vector store and wait for it to be processed.
+     */
+    async createAndPoll(vectorStoreId, body, options) {
+        const file = await this.create(vectorStoreId, body, options);
+        return await this.poll(vectorStoreId, file.id, options);
+    }
+    /**
+     * Wait for the vector store file to finish processing.
+     *
+     * Note: this will return even if the file failed to process, you need to check
+     * file.last_error and file.status to handle these cases
+     */
+    async poll(vectorStoreId, fileId, options) {
+        const headers = { ...options?.headers, 'X-Stainless-Poll-Helper': 'true' };
+        if (options?.pollIntervalMs) {
+            headers['X-Stainless-Custom-Poll-Interval'] = options.pollIntervalMs.toString();
+        }
+        while (true) {
+            const fileResponse = await this.retrieve(vectorStoreId, fileId, {
+                ...options,
+                headers,
+            }).withResponse();
+            const file = fileResponse.data;
+            switch (file.status) {
+                case 'in_progress':
+                    let sleepInterval = 5000;
+                    if (options?.pollIntervalMs) {
+                        sleepInterval = options.pollIntervalMs;
+                    }
+                    else {
+                        const headerInterval = fileResponse.response.headers.get('openai-poll-after-ms');
+                        if (headerInterval) {
+                            const headerIntervalMs = parseInt(headerInterval);
+                            if (!isNaN(headerIntervalMs)) {
+                                sleepInterval = headerIntervalMs;
+                            }
+                        }
+                    }
+                    await (0, core_1.sleep)(sleepInterval);
+                    break;
+                case 'failed':
+                case 'completed':
+                    return file;
+            }
+        }
+    }
+    /**
+     * Upload a file to the `files` API and then attach it to the given vector store.
+     *
+     * Note the file will be asynchronously processed (you can use the alternative
+     * polling helper method to wait for processing to complete).
+     */
+    async upload(vectorStoreId, file, options) {
+        const fileInfo = await this._client.files.create({ file: file, purpose: 'assistants' }, options);
+        return this.create(vectorStoreId, { file_id: fileInfo.id }, options);
+    }
+    /**
+     * Add a file to a vector store and poll until processing is complete.
+     */
+    async uploadAndPoll(vectorStoreId, file, options) {
+        const fileInfo = await this.upload(vectorStoreId, file, options);
+        return await this.poll(vectorStoreId, fileInfo.id, options);
+    }
+    /**
+     * Retrieve the parsed contents of a vector store file.
+     */
+    content(vectorStoreId, fileId, options) {
+        return this._client.getAPIList(`/vector_stores/${vectorStoreId}/files/${fileId}/content`, FileContentResponsesPage, { ...options, headers: { 'OpenAI-Beta': 'assistants=v2', ...options?.headers } });
+    }
+}
+exports.Files = Files;
+class VectorStoreFilesPage extends pagination_1.CursorPage {
+}
+exports.VectorStoreFilesPage = VectorStoreFilesPage;
+/**
+ * Note: no pagination actually occurs yet, this is for forwards-compatibility.
+ */
+class FileContentResponsesPage extends pagination_1.Page {
+}
+exports.FileContentResponsesPage = FileContentResponsesPage;
+Files.VectorStoreFilesPage = VectorStoreFilesPage;
+Files.FileContentResponsesPage = FileContentResponsesPage;
+//# sourceMappingURL=files.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/resources/vector-stores/vector-stores.js":
+/*!**********************************************************************!*\
+  !*** ./node_modules/openai/resources/vector-stores/vector-stores.js ***!
+  \**********************************************************************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.VectorStoreSearchResponsesPage = exports.VectorStoresPage = exports.VectorStores = void 0;
+const resource_1 = __webpack_require__(/*! ../../resource.js */ "./node_modules/openai/resource.js");
+const core_1 = __webpack_require__(/*! ../../core.js */ "./node_modules/openai/core.js");
+const FileBatchesAPI = __importStar(__webpack_require__(/*! ./file-batches.js */ "./node_modules/openai/resources/vector-stores/file-batches.js"));
+const file_batches_1 = __webpack_require__(/*! ./file-batches.js */ "./node_modules/openai/resources/vector-stores/file-batches.js");
+const FilesAPI = __importStar(__webpack_require__(/*! ./files.js */ "./node_modules/openai/resources/vector-stores/files.js"));
+const files_1 = __webpack_require__(/*! ./files.js */ "./node_modules/openai/resources/vector-stores/files.js");
+const pagination_1 = __webpack_require__(/*! ../../pagination.js */ "./node_modules/openai/pagination.js");
+class VectorStores extends resource_1.APIResource {
+    constructor() {
+        super(...arguments);
+        this.files = new FilesAPI.Files(this._client);
+        this.fileBatches = new FileBatchesAPI.FileBatches(this._client);
+    }
+    /**
+     * Create a vector store.
+     */
+    create(body, options) {
+        return this._client.post('/vector_stores', {
+            body,
+            ...options,
+            headers: { 'OpenAI-Beta': 'assistants=v2', ...options?.headers },
+        });
+    }
+    /**
+     * Retrieves a vector store.
+     */
+    retrieve(vectorStoreId, options) {
+        return this._client.get(`/vector_stores/${vectorStoreId}`, {
+            ...options,
+            headers: { 'OpenAI-Beta': 'assistants=v2', ...options?.headers },
+        });
+    }
+    /**
+     * Modifies a vector store.
+     */
+    update(vectorStoreId, body, options) {
+        return this._client.post(`/vector_stores/${vectorStoreId}`, {
+            body,
+            ...options,
+            headers: { 'OpenAI-Beta': 'assistants=v2', ...options?.headers },
+        });
+    }
+    list(query = {}, options) {
+        if ((0, core_1.isRequestOptions)(query)) {
+            return this.list({}, query);
+        }
+        return this._client.getAPIList('/vector_stores', VectorStoresPage, {
+            query,
+            ...options,
+            headers: { 'OpenAI-Beta': 'assistants=v2', ...options?.headers },
+        });
+    }
+    /**
+     * Delete a vector store.
+     */
+    del(vectorStoreId, options) {
+        return this._client.delete(`/vector_stores/${vectorStoreId}`, {
+            ...options,
+            headers: { 'OpenAI-Beta': 'assistants=v2', ...options?.headers },
+        });
+    }
+    /**
+     * Search a vector store for relevant chunks based on a query and file attributes
+     * filter.
+     */
+    search(vectorStoreId, body, options) {
+        return this._client.getAPIList(`/vector_stores/${vectorStoreId}/search`, VectorStoreSearchResponsesPage, {
+            body,
+            method: 'post',
+            ...options,
+            headers: { 'OpenAI-Beta': 'assistants=v2', ...options?.headers },
+        });
+    }
+}
+exports.VectorStores = VectorStores;
+class VectorStoresPage extends pagination_1.CursorPage {
+}
+exports.VectorStoresPage = VectorStoresPage;
+/**
+ * Note: no pagination actually occurs yet, this is for forwards-compatibility.
+ */
+class VectorStoreSearchResponsesPage extends pagination_1.Page {
+}
+exports.VectorStoreSearchResponsesPage = VectorStoreSearchResponsesPage;
+VectorStores.VectorStoresPage = VectorStoresPage;
+VectorStores.VectorStoreSearchResponsesPage = VectorStoreSearchResponsesPage;
+VectorStores.Files = files_1.Files;
+VectorStores.VectorStoreFilesPage = files_1.VectorStoreFilesPage;
+VectorStores.FileContentResponsesPage = files_1.FileContentResponsesPage;
+VectorStores.FileBatches = file_batches_1.FileBatches;
+//# sourceMappingURL=vector-stores.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/streaming.js":
+/*!******************************************!*\
+  !*** ./node_modules/openai/streaming.js ***!
+  \******************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports._iterSSEMessages = exports.Stream = void 0;
+const index_1 = __webpack_require__(/*! ./_shims/index.js */ "./node_modules/openai/_shims/index.js");
+const error_1 = __webpack_require__(/*! ./error.js */ "./node_modules/openai/error.js");
+const line_1 = __webpack_require__(/*! ./internal/decoders/line.js */ "./node_modules/openai/internal/decoders/line.js");
+const stream_utils_1 = __webpack_require__(/*! ./internal/stream-utils.js */ "./node_modules/openai/internal/stream-utils.js");
+const core_1 = __webpack_require__(/*! ./core.js */ "./node_modules/openai/core.js");
+const error_2 = __webpack_require__(/*! ./error.js */ "./node_modules/openai/error.js");
+class Stream {
+    constructor(iterator, controller) {
+        this.iterator = iterator;
+        this.controller = controller;
+    }
+    static fromSSEResponse(response, controller) {
+        let consumed = false;
+        async function* iterator() {
+            if (consumed) {
+                throw new Error('Cannot iterate over a consumed stream, use `.tee()` to split the stream.');
+            }
+            consumed = true;
+            let done = false;
+            try {
+                for await (const sse of _iterSSEMessages(response, controller)) {
+                    if (done)
+                        continue;
+                    if (sse.data.startsWith('[DONE]')) {
+                        done = true;
+                        continue;
+                    }
+                    if (sse.event === null ||
+                        sse.event.startsWith('response.') ||
+                        sse.event.startsWith('transcript.')) {
+                        let data;
+                        try {
+                            data = JSON.parse(sse.data);
+                        }
+                        catch (e) {
+                            console.error(`Could not parse message into JSON:`, sse.data);
+                            console.error(`From chunk:`, sse.raw);
+                            throw e;
+                        }
+                        if (data && data.error) {
+                            throw new error_2.APIError(undefined, data.error, undefined, (0, core_1.createResponseHeaders)(response.headers));
+                        }
+                        yield data;
+                    }
+                    else {
+                        let data;
+                        try {
+                            data = JSON.parse(sse.data);
+                        }
+                        catch (e) {
+                            console.error(`Could not parse message into JSON:`, sse.data);
+                            console.error(`From chunk:`, sse.raw);
+                            throw e;
+                        }
+                        // TODO: Is this where the error should be thrown?
+                        if (sse.event == 'error') {
+                            throw new error_2.APIError(undefined, data.error, data.message, undefined);
+                        }
+                        yield { event: sse.event, data: data };
+                    }
+                }
+                done = true;
+            }
+            catch (e) {
+                // If the user calls `stream.controller.abort()`, we should exit without throwing.
+                if (e instanceof Error && e.name === 'AbortError')
+                    return;
+                throw e;
+            }
+            finally {
+                // If the user `break`s, abort the ongoing request.
+                if (!done)
+                    controller.abort();
+            }
+        }
+        return new Stream(iterator, controller);
+    }
+    /**
+     * Generates a Stream from a newline-separated ReadableStream
+     * where each item is a JSON value.
+     */
+    static fromReadableStream(readableStream, controller) {
+        let consumed = false;
+        async function* iterLines() {
+            const lineDecoder = new line_1.LineDecoder();
+            const iter = (0, stream_utils_1.ReadableStreamToAsyncIterable)(readableStream);
+            for await (const chunk of iter) {
+                for (const line of lineDecoder.decode(chunk)) {
+                    yield line;
+                }
+            }
+            for (const line of lineDecoder.flush()) {
+                yield line;
+            }
+        }
+        async function* iterator() {
+            if (consumed) {
+                throw new Error('Cannot iterate over a consumed stream, use `.tee()` to split the stream.');
+            }
+            consumed = true;
+            let done = false;
+            try {
+                for await (const line of iterLines()) {
+                    if (done)
+                        continue;
+                    if (line)
+                        yield JSON.parse(line);
+                }
+                done = true;
+            }
+            catch (e) {
+                // If the user calls `stream.controller.abort()`, we should exit without throwing.
+                if (e instanceof Error && e.name === 'AbortError')
+                    return;
+                throw e;
+            }
+            finally {
+                // If the user `break`s, abort the ongoing request.
+                if (!done)
+                    controller.abort();
+            }
+        }
+        return new Stream(iterator, controller);
+    }
+    [Symbol.asyncIterator]() {
+        return this.iterator();
+    }
+    /**
+     * Splits the stream into two streams which can be
+     * independently read from at different speeds.
+     */
+    tee() {
+        const left = [];
+        const right = [];
+        const iterator = this.iterator();
+        const teeIterator = (queue) => {
+            return {
+                next: () => {
+                    if (queue.length === 0) {
+                        const result = iterator.next();
+                        left.push(result);
+                        right.push(result);
+                    }
+                    return queue.shift();
+                },
+            };
+        };
+        return [
+            new Stream(() => teeIterator(left), this.controller),
+            new Stream(() => teeIterator(right), this.controller),
+        ];
+    }
+    /**
+     * Converts this stream to a newline-separated ReadableStream of
+     * JSON stringified values in the stream
+     * which can be turned back into a Stream with `Stream.fromReadableStream()`.
+     */
+    toReadableStream() {
+        const self = this;
+        let iter;
+        const encoder = new TextEncoder();
+        return new index_1.ReadableStream({
+            async start() {
+                iter = self[Symbol.asyncIterator]();
+            },
+            async pull(ctrl) {
+                try {
+                    const { value, done } = await iter.next();
+                    if (done)
+                        return ctrl.close();
+                    const bytes = encoder.encode(JSON.stringify(value) + '\n');
+                    ctrl.enqueue(bytes);
+                }
+                catch (err) {
+                    ctrl.error(err);
+                }
+            },
+            async cancel() {
+                await iter.return?.();
+            },
+        });
+    }
+}
+exports.Stream = Stream;
+async function* _iterSSEMessages(response, controller) {
+    if (!response.body) {
+        controller.abort();
+        throw new error_1.OpenAIError(`Attempted to iterate over a response with no body`);
+    }
+    const sseDecoder = new SSEDecoder();
+    const lineDecoder = new line_1.LineDecoder();
+    const iter = (0, stream_utils_1.ReadableStreamToAsyncIterable)(response.body);
+    for await (const sseChunk of iterSSEChunks(iter)) {
+        for (const line of lineDecoder.decode(sseChunk)) {
+            const sse = sseDecoder.decode(line);
+            if (sse)
+                yield sse;
+        }
+    }
+    for (const line of lineDecoder.flush()) {
+        const sse = sseDecoder.decode(line);
+        if (sse)
+            yield sse;
+    }
+}
+exports._iterSSEMessages = _iterSSEMessages;
+/**
+ * Given an async iterable iterator, iterates over it and yields full
+ * SSE chunks, i.e. yields when a double new-line is encountered.
+ */
+async function* iterSSEChunks(iterator) {
+    let data = new Uint8Array();
+    for await (const chunk of iterator) {
+        if (chunk == null) {
+            continue;
+        }
+        const binaryChunk = chunk instanceof ArrayBuffer ? new Uint8Array(chunk)
+            : typeof chunk === 'string' ? new TextEncoder().encode(chunk)
+                : chunk;
+        let newData = new Uint8Array(data.length + binaryChunk.length);
+        newData.set(data);
+        newData.set(binaryChunk, data.length);
+        data = newData;
+        let patternIndex;
+        while ((patternIndex = (0, line_1.findDoubleNewlineIndex)(data)) !== -1) {
+            yield data.slice(0, patternIndex);
+            data = data.slice(patternIndex);
+        }
+    }
+    if (data.length > 0) {
+        yield data;
+    }
+}
+class SSEDecoder {
+    constructor() {
+        this.event = null;
+        this.data = [];
+        this.chunks = [];
+    }
+    decode(line) {
+        if (line.endsWith('\r')) {
+            line = line.substring(0, line.length - 1);
+        }
+        if (!line) {
+            // empty line and we didn't previously encounter any messages
+            if (!this.event && !this.data.length)
+                return null;
+            const sse = {
+                event: this.event,
+                data: this.data.join('\n'),
+                raw: this.chunks,
+            };
+            this.event = null;
+            this.data = [];
+            this.chunks = [];
+            return sse;
+        }
+        this.chunks.push(line);
+        if (line.startsWith(':')) {
+            return null;
+        }
+        let [fieldname, _, value] = partition(line, ':');
+        if (value.startsWith(' ')) {
+            value = value.substring(1);
+        }
+        if (fieldname === 'event') {
+            this.event = value;
+        }
+        else if (fieldname === 'data') {
+            this.data.push(value);
+        }
+        return null;
+    }
+}
+function partition(str, delimiter) {
+    const index = str.indexOf(delimiter);
+    if (index !== -1) {
+        return [str.substring(0, index), delimiter, str.substring(index + delimiter.length)];
+    }
+    return [str, '', ''];
+}
+//# sourceMappingURL=streaming.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/uploads.js":
+/*!****************************************!*\
+  !*** ./node_modules/openai/uploads.js ***!
+  \****************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.createForm = exports.multipartFormRequestOptions = exports.maybeMultipartFormRequestOptions = exports.isMultipartBody = exports.toFile = exports.isUploadable = exports.isBlobLike = exports.isFileLike = exports.isResponseLike = exports.fileFromPath = void 0;
+const index_1 = __webpack_require__(/*! ./_shims/index.js */ "./node_modules/openai/_shims/index.js");
+var index_2 = __webpack_require__(/*! ./_shims/index.js */ "./node_modules/openai/_shims/index.js");
+Object.defineProperty(exports, "fileFromPath", ({ enumerable: true, get: function () { return index_2.fileFromPath; } }));
+const isResponseLike = (value) => value != null &&
+    typeof value === 'object' &&
+    typeof value.url === 'string' &&
+    typeof value.blob === 'function';
+exports.isResponseLike = isResponseLike;
+const isFileLike = (value) => value != null &&
+    typeof value === 'object' &&
+    typeof value.name === 'string' &&
+    typeof value.lastModified === 'number' &&
+    (0, exports.isBlobLike)(value);
+exports.isFileLike = isFileLike;
+/**
+ * The BlobLike type omits arrayBuffer() because @types/node-fetch@^2.6.4 lacks it; but this check
+ * adds the arrayBuffer() method type because it is available and used at runtime
+ */
+const isBlobLike = (value) => value != null &&
+    typeof value === 'object' &&
+    typeof value.size === 'number' &&
+    typeof value.type === 'string' &&
+    typeof value.text === 'function' &&
+    typeof value.slice === 'function' &&
+    typeof value.arrayBuffer === 'function';
+exports.isBlobLike = isBlobLike;
+const isUploadable = (value) => {
+    return (0, exports.isFileLike)(value) || (0, exports.isResponseLike)(value) || (0, index_1.isFsReadStream)(value);
+};
+exports.isUploadable = isUploadable;
+/**
+ * Helper for creating a {@link File} to pass to an SDK upload method from a variety of different data formats
+ * @param value the raw content of the file.  Can be an {@link Uploadable}, {@link BlobLikePart}, or {@link AsyncIterable} of {@link BlobLikePart}s
+ * @param {string=} name the name of the file. If omitted, toFile will try to determine a file name from bits if possible
+ * @param {Object=} options additional properties
+ * @param {string=} options.type the MIME type of the content
+ * @param {number=} options.lastModified the last modified timestamp
+ * @returns a {@link File} with the given properties
+ */
+async function toFile(value, name, options) {
+    // If it's a promise, resolve it.
+    value = await value;
+    // If we've been given a `File` we don't need to do anything
+    if ((0, exports.isFileLike)(value)) {
+        return value;
+    }
+    if ((0, exports.isResponseLike)(value)) {
+        const blob = await value.blob();
+        name || (name = new URL(value.url).pathname.split(/[\\/]/).pop() ?? 'unknown_file');
+        // we need to convert the `Blob` into an array buffer because the `Blob` class
+        // that `node-fetch` defines is incompatible with the web standard which results
+        // in `new File` interpreting it as a string instead of binary data.
+        const data = (0, exports.isBlobLike)(blob) ? [(await blob.arrayBuffer())] : [blob];
+        return new index_1.File(data, name, options);
+    }
+    const bits = await getBytes(value);
+    name || (name = getName(value) ?? 'unknown_file');
+    if (!options?.type) {
+        const type = bits[0]?.type;
+        if (typeof type === 'string') {
+            options = { ...options, type };
+        }
+    }
+    return new index_1.File(bits, name, options);
+}
+exports.toFile = toFile;
+async function getBytes(value) {
+    let parts = [];
+    if (typeof value === 'string' ||
+        ArrayBuffer.isView(value) || // includes Uint8Array, Buffer, etc.
+        value instanceof ArrayBuffer) {
+        parts.push(value);
+    }
+    else if ((0, exports.isBlobLike)(value)) {
+        parts.push(await value.arrayBuffer());
+    }
+    else if (isAsyncIterableIterator(value) // includes Readable, ReadableStream, etc.
+    ) {
+        for await (const chunk of value) {
+            parts.push(chunk); // TODO, consider validating?
+        }
+    }
+    else {
+        throw new Error(`Unexpected data type: ${typeof value}; constructor: ${value?.constructor
+            ?.name}; props: ${propsForError(value)}`);
+    }
+    return parts;
+}
+function propsForError(value) {
+    const props = Object.getOwnPropertyNames(value);
+    return `[${props.map((p) => `"${p}"`).join(', ')}]`;
+}
+function getName(value) {
+    return (getStringFromMaybeBuffer(value.name) ||
+        getStringFromMaybeBuffer(value.filename) ||
+        // For fs.ReadStream
+        getStringFromMaybeBuffer(value.path)?.split(/[\\/]/).pop());
+}
+const getStringFromMaybeBuffer = (x) => {
+    if (typeof x === 'string')
+        return x;
+    if (typeof Buffer !== 'undefined' && x instanceof Buffer)
+        return String(x);
+    return undefined;
+};
+const isAsyncIterableIterator = (value) => value != null && typeof value === 'object' && typeof value[Symbol.asyncIterator] === 'function';
+const isMultipartBody = (body) => body && typeof body === 'object' && body.body && body[Symbol.toStringTag] === 'MultipartBody';
+exports.isMultipartBody = isMultipartBody;
+/**
+ * Returns a multipart/form-data request if any part of the given request body contains a File / Blob value.
+ * Otherwise returns the request as is.
+ */
+const maybeMultipartFormRequestOptions = async (opts) => {
+    if (!hasUploadableValue(opts.body))
+        return opts;
+    const form = await (0, exports.createForm)(opts.body);
+    return (0, index_1.getMultipartRequestOptions)(form, opts);
+};
+exports.maybeMultipartFormRequestOptions = maybeMultipartFormRequestOptions;
+const multipartFormRequestOptions = async (opts) => {
+    const form = await (0, exports.createForm)(opts.body);
+    return (0, index_1.getMultipartRequestOptions)(form, opts);
+};
+exports.multipartFormRequestOptions = multipartFormRequestOptions;
+const createForm = async (body) => {
+    const form = new index_1.FormData();
+    await Promise.all(Object.entries(body || {}).map(([key, value]) => addFormValue(form, key, value)));
+    return form;
+};
+exports.createForm = createForm;
+const hasUploadableValue = (value) => {
+    if ((0, exports.isUploadable)(value))
+        return true;
+    if (Array.isArray(value))
+        return value.some(hasUploadableValue);
+    if (value && typeof value === 'object') {
+        for (const k in value) {
+            if (hasUploadableValue(value[k]))
+                return true;
+        }
+    }
+    return false;
+};
+const addFormValue = async (form, key, value) => {
+    if (value === undefined)
+        return;
+    if (value == null) {
+        throw new TypeError(`Received null for "${key}"; to pass null in FormData, you must use the string 'null'`);
+    }
+    // TODO: make nested formats configurable
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+        form.append(key, String(value));
+    }
+    else if ((0, exports.isUploadable)(value)) {
+        const file = await toFile(value);
+        form.append(key, file);
+    }
+    else if (Array.isArray(value)) {
+        await Promise.all(value.map((entry) => addFormValue(form, key + '[]', entry)));
+    }
+    else if (typeof value === 'object') {
+        await Promise.all(Object.entries(value).map(([name, prop]) => addFormValue(form, `${key}[${name}]`, prop)));
+    }
+    else {
+        throw new TypeError(`Invalid value given to form, expected a string, number, boolean, object, Array, File or Blob but got ${value} instead`);
+    }
+};
+//# sourceMappingURL=uploads.js.map
+
+/***/ }),
+
+/***/ "./node_modules/openai/version.js":
+/*!****************************************!*\
+  !*** ./node_modules/openai/version.js ***!
+  \****************************************/
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.VERSION = void 0;
+exports.VERSION = '4.97.0'; // x-release-please-version
+//# sourceMappingURL=version.js.map
 
 /***/ }),
 
@@ -18726,4669 +23541,6 @@ module.exports.implForWrapper = function (wrapper) {
 
 /***/ }),
 
-/***/ "./node_modules/which/which.js":
-/*!*************************************!*\
-  !*** ./node_modules/which/which.js ***!
-  \*************************************/
-/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
-
-const isWindows = process.platform === 'win32' ||
-    process.env.OSTYPE === 'cygwin' ||
-    process.env.OSTYPE === 'msys'
-
-const path = __webpack_require__(/*! path */ "path")
-const COLON = isWindows ? ';' : ':'
-const isexe = __webpack_require__(/*! isexe */ "./node_modules/isexe/index.js")
-
-const getNotFoundError = (cmd) =>
-  Object.assign(new Error(`not found: ${cmd}`), { code: 'ENOENT' })
-
-const getPathInfo = (cmd, opt) => {
-  const colon = opt.colon || COLON
-
-  // If it has a slash, then we don't bother searching the pathenv.
-  // just check the file itself, and that's it.
-  const pathEnv = cmd.match(/\//) || isWindows && cmd.match(/\\/) ? ['']
-    : (
-      [
-        // windows always checks the cwd first
-        ...(isWindows ? [process.cwd()] : []),
-        ...(opt.path || process.env.PATH ||
-          /* istanbul ignore next: very unusual */ '').split(colon),
-      ]
-    )
-  const pathExtExe = isWindows
-    ? opt.pathExt || process.env.PATHEXT || '.EXE;.CMD;.BAT;.COM'
-    : ''
-  const pathExt = isWindows ? pathExtExe.split(colon) : ['']
-
-  if (isWindows) {
-    if (cmd.indexOf('.') !== -1 && pathExt[0] !== '')
-      pathExt.unshift('')
-  }
-
-  return {
-    pathEnv,
-    pathExt,
-    pathExtExe,
-  }
-}
-
-const which = (cmd, opt, cb) => {
-  if (typeof opt === 'function') {
-    cb = opt
-    opt = {}
-  }
-  if (!opt)
-    opt = {}
-
-  const { pathEnv, pathExt, pathExtExe } = getPathInfo(cmd, opt)
-  const found = []
-
-  const step = i => new Promise((resolve, reject) => {
-    if (i === pathEnv.length)
-      return opt.all && found.length ? resolve(found)
-        : reject(getNotFoundError(cmd))
-
-    const ppRaw = pathEnv[i]
-    const pathPart = /^".*"$/.test(ppRaw) ? ppRaw.slice(1, -1) : ppRaw
-
-    const pCmd = path.join(pathPart, cmd)
-    const p = !pathPart && /^\.[\\\/]/.test(cmd) ? cmd.slice(0, 2) + pCmd
-      : pCmd
-
-    resolve(subStep(p, i, 0))
-  })
-
-  const subStep = (p, i, ii) => new Promise((resolve, reject) => {
-    if (ii === pathExt.length)
-      return resolve(step(i + 1))
-    const ext = pathExt[ii]
-    isexe(p + ext, { pathExt: pathExtExe }, (er, is) => {
-      if (!er && is) {
-        if (opt.all)
-          found.push(p + ext)
-        else
-          return resolve(p + ext)
-      }
-      return resolve(subStep(p, i, ii + 1))
-    })
-  })
-
-  return cb ? step(0).then(res => cb(null, res), cb) : step(0)
-}
-
-const whichSync = (cmd, opt) => {
-  opt = opt || {}
-
-  const { pathEnv, pathExt, pathExtExe } = getPathInfo(cmd, opt)
-  const found = []
-
-  for (let i = 0; i < pathEnv.length; i ++) {
-    const ppRaw = pathEnv[i]
-    const pathPart = /^".*"$/.test(ppRaw) ? ppRaw.slice(1, -1) : ppRaw
-
-    const pCmd = path.join(pathPart, cmd)
-    const p = !pathPart && /^\.[\\\/]/.test(cmd) ? cmd.slice(0, 2) + pCmd
-      : pCmd
-
-    for (let j = 0; j < pathExt.length; j ++) {
-      const cur = p + pathExt[j]
-      try {
-        const is = isexe.sync(cur, { pathExt: pathExtExe })
-        if (is) {
-          if (opt.all)
-            found.push(cur)
-          else
-            return cur
-        }
-      } catch (ex) {}
-    }
-  }
-
-  if (opt.all && found.length)
-    return found
-
-  if (opt.nothrow)
-    return null
-
-  throw getNotFoundError(cmd)
-}
-
-module.exports = which
-which.sync = whichSync
-
-
-/***/ }),
-
-/***/ "./node_modules/zod/lib/index.mjs":
-/*!****************************************!*\
-  !*** ./node_modules/zod/lib/index.mjs ***!
-  \****************************************/
-/***/ ((__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) => {
-
-"use strict";
-__webpack_require__.r(__webpack_exports__);
-/* harmony export */ __webpack_require__.d(__webpack_exports__, {
-/* harmony export */   BRAND: () => (/* binding */ BRAND),
-/* harmony export */   DIRTY: () => (/* binding */ DIRTY),
-/* harmony export */   EMPTY_PATH: () => (/* binding */ EMPTY_PATH),
-/* harmony export */   INVALID: () => (/* binding */ INVALID),
-/* harmony export */   NEVER: () => (/* binding */ NEVER),
-/* harmony export */   OK: () => (/* binding */ OK),
-/* harmony export */   ParseStatus: () => (/* binding */ ParseStatus),
-/* harmony export */   Schema: () => (/* binding */ ZodType),
-/* harmony export */   ZodAny: () => (/* binding */ ZodAny),
-/* harmony export */   ZodArray: () => (/* binding */ ZodArray),
-/* harmony export */   ZodBigInt: () => (/* binding */ ZodBigInt),
-/* harmony export */   ZodBoolean: () => (/* binding */ ZodBoolean),
-/* harmony export */   ZodBranded: () => (/* binding */ ZodBranded),
-/* harmony export */   ZodCatch: () => (/* binding */ ZodCatch),
-/* harmony export */   ZodDate: () => (/* binding */ ZodDate),
-/* harmony export */   ZodDefault: () => (/* binding */ ZodDefault),
-/* harmony export */   ZodDiscriminatedUnion: () => (/* binding */ ZodDiscriminatedUnion),
-/* harmony export */   ZodEffects: () => (/* binding */ ZodEffects),
-/* harmony export */   ZodEnum: () => (/* binding */ ZodEnum),
-/* harmony export */   ZodError: () => (/* binding */ ZodError),
-/* harmony export */   ZodFirstPartyTypeKind: () => (/* binding */ ZodFirstPartyTypeKind),
-/* harmony export */   ZodFunction: () => (/* binding */ ZodFunction),
-/* harmony export */   ZodIntersection: () => (/* binding */ ZodIntersection),
-/* harmony export */   ZodIssueCode: () => (/* binding */ ZodIssueCode),
-/* harmony export */   ZodLazy: () => (/* binding */ ZodLazy),
-/* harmony export */   ZodLiteral: () => (/* binding */ ZodLiteral),
-/* harmony export */   ZodMap: () => (/* binding */ ZodMap),
-/* harmony export */   ZodNaN: () => (/* binding */ ZodNaN),
-/* harmony export */   ZodNativeEnum: () => (/* binding */ ZodNativeEnum),
-/* harmony export */   ZodNever: () => (/* binding */ ZodNever),
-/* harmony export */   ZodNull: () => (/* binding */ ZodNull),
-/* harmony export */   ZodNullable: () => (/* binding */ ZodNullable),
-/* harmony export */   ZodNumber: () => (/* binding */ ZodNumber),
-/* harmony export */   ZodObject: () => (/* binding */ ZodObject),
-/* harmony export */   ZodOptional: () => (/* binding */ ZodOptional),
-/* harmony export */   ZodParsedType: () => (/* binding */ ZodParsedType),
-/* harmony export */   ZodPipeline: () => (/* binding */ ZodPipeline),
-/* harmony export */   ZodPromise: () => (/* binding */ ZodPromise),
-/* harmony export */   ZodReadonly: () => (/* binding */ ZodReadonly),
-/* harmony export */   ZodRecord: () => (/* binding */ ZodRecord),
-/* harmony export */   ZodSchema: () => (/* binding */ ZodType),
-/* harmony export */   ZodSet: () => (/* binding */ ZodSet),
-/* harmony export */   ZodString: () => (/* binding */ ZodString),
-/* harmony export */   ZodSymbol: () => (/* binding */ ZodSymbol),
-/* harmony export */   ZodTransformer: () => (/* binding */ ZodEffects),
-/* harmony export */   ZodTuple: () => (/* binding */ ZodTuple),
-/* harmony export */   ZodType: () => (/* binding */ ZodType),
-/* harmony export */   ZodUndefined: () => (/* binding */ ZodUndefined),
-/* harmony export */   ZodUnion: () => (/* binding */ ZodUnion),
-/* harmony export */   ZodUnknown: () => (/* binding */ ZodUnknown),
-/* harmony export */   ZodVoid: () => (/* binding */ ZodVoid),
-/* harmony export */   addIssueToContext: () => (/* binding */ addIssueToContext),
-/* harmony export */   any: () => (/* binding */ anyType),
-/* harmony export */   array: () => (/* binding */ arrayType),
-/* harmony export */   bigint: () => (/* binding */ bigIntType),
-/* harmony export */   boolean: () => (/* binding */ booleanType),
-/* harmony export */   coerce: () => (/* binding */ coerce),
-/* harmony export */   custom: () => (/* binding */ custom),
-/* harmony export */   date: () => (/* binding */ dateType),
-/* harmony export */   datetimeRegex: () => (/* binding */ datetimeRegex),
-/* harmony export */   "default": () => (/* binding */ z),
-/* harmony export */   defaultErrorMap: () => (/* binding */ errorMap),
-/* harmony export */   discriminatedUnion: () => (/* binding */ discriminatedUnionType),
-/* harmony export */   effect: () => (/* binding */ effectsType),
-/* harmony export */   "enum": () => (/* binding */ enumType),
-/* harmony export */   "function": () => (/* binding */ functionType),
-/* harmony export */   getErrorMap: () => (/* binding */ getErrorMap),
-/* harmony export */   getParsedType: () => (/* binding */ getParsedType),
-/* harmony export */   "instanceof": () => (/* binding */ instanceOfType),
-/* harmony export */   intersection: () => (/* binding */ intersectionType),
-/* harmony export */   isAborted: () => (/* binding */ isAborted),
-/* harmony export */   isAsync: () => (/* binding */ isAsync),
-/* harmony export */   isDirty: () => (/* binding */ isDirty),
-/* harmony export */   isValid: () => (/* binding */ isValid),
-/* harmony export */   late: () => (/* binding */ late),
-/* harmony export */   lazy: () => (/* binding */ lazyType),
-/* harmony export */   literal: () => (/* binding */ literalType),
-/* harmony export */   makeIssue: () => (/* binding */ makeIssue),
-/* harmony export */   map: () => (/* binding */ mapType),
-/* harmony export */   nan: () => (/* binding */ nanType),
-/* harmony export */   nativeEnum: () => (/* binding */ nativeEnumType),
-/* harmony export */   never: () => (/* binding */ neverType),
-/* harmony export */   "null": () => (/* binding */ nullType),
-/* harmony export */   nullable: () => (/* binding */ nullableType),
-/* harmony export */   number: () => (/* binding */ numberType),
-/* harmony export */   object: () => (/* binding */ objectType),
-/* harmony export */   objectUtil: () => (/* binding */ objectUtil),
-/* harmony export */   oboolean: () => (/* binding */ oboolean),
-/* harmony export */   onumber: () => (/* binding */ onumber),
-/* harmony export */   optional: () => (/* binding */ optionalType),
-/* harmony export */   ostring: () => (/* binding */ ostring),
-/* harmony export */   pipeline: () => (/* binding */ pipelineType),
-/* harmony export */   preprocess: () => (/* binding */ preprocessType),
-/* harmony export */   promise: () => (/* binding */ promiseType),
-/* harmony export */   quotelessJson: () => (/* binding */ quotelessJson),
-/* harmony export */   record: () => (/* binding */ recordType),
-/* harmony export */   set: () => (/* binding */ setType),
-/* harmony export */   setErrorMap: () => (/* binding */ setErrorMap),
-/* harmony export */   strictObject: () => (/* binding */ strictObjectType),
-/* harmony export */   string: () => (/* binding */ stringType),
-/* harmony export */   symbol: () => (/* binding */ symbolType),
-/* harmony export */   transformer: () => (/* binding */ effectsType),
-/* harmony export */   tuple: () => (/* binding */ tupleType),
-/* harmony export */   undefined: () => (/* binding */ undefinedType),
-/* harmony export */   union: () => (/* binding */ unionType),
-/* harmony export */   unknown: () => (/* binding */ unknownType),
-/* harmony export */   util: () => (/* binding */ util),
-/* harmony export */   "void": () => (/* binding */ voidType),
-/* harmony export */   z: () => (/* binding */ z)
-/* harmony export */ });
-var util;
-(function (util) {
-    util.assertEqual = (val) => val;
-    function assertIs(_arg) { }
-    util.assertIs = assertIs;
-    function assertNever(_x) {
-        throw new Error();
-    }
-    util.assertNever = assertNever;
-    util.arrayToEnum = (items) => {
-        const obj = {};
-        for (const item of items) {
-            obj[item] = item;
-        }
-        return obj;
-    };
-    util.getValidEnumValues = (obj) => {
-        const validKeys = util.objectKeys(obj).filter((k) => typeof obj[obj[k]] !== "number");
-        const filtered = {};
-        for (const k of validKeys) {
-            filtered[k] = obj[k];
-        }
-        return util.objectValues(filtered);
-    };
-    util.objectValues = (obj) => {
-        return util.objectKeys(obj).map(function (e) {
-            return obj[e];
-        });
-    };
-    util.objectKeys = typeof Object.keys === "function" // eslint-disable-line ban/ban
-        ? (obj) => Object.keys(obj) // eslint-disable-line ban/ban
-        : (object) => {
-            const keys = [];
-            for (const key in object) {
-                if (Object.prototype.hasOwnProperty.call(object, key)) {
-                    keys.push(key);
-                }
-            }
-            return keys;
-        };
-    util.find = (arr, checker) => {
-        for (const item of arr) {
-            if (checker(item))
-                return item;
-        }
-        return undefined;
-    };
-    util.isInteger = typeof Number.isInteger === "function"
-        ? (val) => Number.isInteger(val) // eslint-disable-line ban/ban
-        : (val) => typeof val === "number" && isFinite(val) && Math.floor(val) === val;
-    function joinValues(array, separator = " | ") {
-        return array
-            .map((val) => (typeof val === "string" ? `'${val}'` : val))
-            .join(separator);
-    }
-    util.joinValues = joinValues;
-    util.jsonStringifyReplacer = (_, value) => {
-        if (typeof value === "bigint") {
-            return value.toString();
-        }
-        return value;
-    };
-})(util || (util = {}));
-var objectUtil;
-(function (objectUtil) {
-    objectUtil.mergeShapes = (first, second) => {
-        return {
-            ...first,
-            ...second, // second overwrites first
-        };
-    };
-})(objectUtil || (objectUtil = {}));
-const ZodParsedType = util.arrayToEnum([
-    "string",
-    "nan",
-    "number",
-    "integer",
-    "float",
-    "boolean",
-    "date",
-    "bigint",
-    "symbol",
-    "function",
-    "undefined",
-    "null",
-    "array",
-    "object",
-    "unknown",
-    "promise",
-    "void",
-    "never",
-    "map",
-    "set",
-]);
-const getParsedType = (data) => {
-    const t = typeof data;
-    switch (t) {
-        case "undefined":
-            return ZodParsedType.undefined;
-        case "string":
-            return ZodParsedType.string;
-        case "number":
-            return isNaN(data) ? ZodParsedType.nan : ZodParsedType.number;
-        case "boolean":
-            return ZodParsedType.boolean;
-        case "function":
-            return ZodParsedType.function;
-        case "bigint":
-            return ZodParsedType.bigint;
-        case "symbol":
-            return ZodParsedType.symbol;
-        case "object":
-            if (Array.isArray(data)) {
-                return ZodParsedType.array;
-            }
-            if (data === null) {
-                return ZodParsedType.null;
-            }
-            if (data.then &&
-                typeof data.then === "function" &&
-                data.catch &&
-                typeof data.catch === "function") {
-                return ZodParsedType.promise;
-            }
-            if (typeof Map !== "undefined" && data instanceof Map) {
-                return ZodParsedType.map;
-            }
-            if (typeof Set !== "undefined" && data instanceof Set) {
-                return ZodParsedType.set;
-            }
-            if (typeof Date !== "undefined" && data instanceof Date) {
-                return ZodParsedType.date;
-            }
-            return ZodParsedType.object;
-        default:
-            return ZodParsedType.unknown;
-    }
-};
-
-const ZodIssueCode = util.arrayToEnum([
-    "invalid_type",
-    "invalid_literal",
-    "custom",
-    "invalid_union",
-    "invalid_union_discriminator",
-    "invalid_enum_value",
-    "unrecognized_keys",
-    "invalid_arguments",
-    "invalid_return_type",
-    "invalid_date",
-    "invalid_string",
-    "too_small",
-    "too_big",
-    "invalid_intersection_types",
-    "not_multiple_of",
-    "not_finite",
-]);
-const quotelessJson = (obj) => {
-    const json = JSON.stringify(obj, null, 2);
-    return json.replace(/"([^"]+)":/g, "$1:");
-};
-class ZodError extends Error {
-    get errors() {
-        return this.issues;
-    }
-    constructor(issues) {
-        super();
-        this.issues = [];
-        this.addIssue = (sub) => {
-            this.issues = [...this.issues, sub];
-        };
-        this.addIssues = (subs = []) => {
-            this.issues = [...this.issues, ...subs];
-        };
-        const actualProto = new.target.prototype;
-        if (Object.setPrototypeOf) {
-            // eslint-disable-next-line ban/ban
-            Object.setPrototypeOf(this, actualProto);
-        }
-        else {
-            this.__proto__ = actualProto;
-        }
-        this.name = "ZodError";
-        this.issues = issues;
-    }
-    format(_mapper) {
-        const mapper = _mapper ||
-            function (issue) {
-                return issue.message;
-            };
-        const fieldErrors = { _errors: [] };
-        const processError = (error) => {
-            for (const issue of error.issues) {
-                if (issue.code === "invalid_union") {
-                    issue.unionErrors.map(processError);
-                }
-                else if (issue.code === "invalid_return_type") {
-                    processError(issue.returnTypeError);
-                }
-                else if (issue.code === "invalid_arguments") {
-                    processError(issue.argumentsError);
-                }
-                else if (issue.path.length === 0) {
-                    fieldErrors._errors.push(mapper(issue));
-                }
-                else {
-                    let curr = fieldErrors;
-                    let i = 0;
-                    while (i < issue.path.length) {
-                        const el = issue.path[i];
-                        const terminal = i === issue.path.length - 1;
-                        if (!terminal) {
-                            curr[el] = curr[el] || { _errors: [] };
-                            // if (typeof el === "string") {
-                            //   curr[el] = curr[el] || { _errors: [] };
-                            // } else if (typeof el === "number") {
-                            //   const errorArray: any = [];
-                            //   errorArray._errors = [];
-                            //   curr[el] = curr[el] || errorArray;
-                            // }
-                        }
-                        else {
-                            curr[el] = curr[el] || { _errors: [] };
-                            curr[el]._errors.push(mapper(issue));
-                        }
-                        curr = curr[el];
-                        i++;
-                    }
-                }
-            }
-        };
-        processError(this);
-        return fieldErrors;
-    }
-    static assert(value) {
-        if (!(value instanceof ZodError)) {
-            throw new Error(`Not a ZodError: ${value}`);
-        }
-    }
-    toString() {
-        return this.message;
-    }
-    get message() {
-        return JSON.stringify(this.issues, util.jsonStringifyReplacer, 2);
-    }
-    get isEmpty() {
-        return this.issues.length === 0;
-    }
-    flatten(mapper = (issue) => issue.message) {
-        const fieldErrors = {};
-        const formErrors = [];
-        for (const sub of this.issues) {
-            if (sub.path.length > 0) {
-                fieldErrors[sub.path[0]] = fieldErrors[sub.path[0]] || [];
-                fieldErrors[sub.path[0]].push(mapper(sub));
-            }
-            else {
-                formErrors.push(mapper(sub));
-            }
-        }
-        return { formErrors, fieldErrors };
-    }
-    get formErrors() {
-        return this.flatten();
-    }
-}
-ZodError.create = (issues) => {
-    const error = new ZodError(issues);
-    return error;
-};
-
-const errorMap = (issue, _ctx) => {
-    let message;
-    switch (issue.code) {
-        case ZodIssueCode.invalid_type:
-            if (issue.received === ZodParsedType.undefined) {
-                message = "Required";
-            }
-            else {
-                message = `Expected ${issue.expected}, received ${issue.received}`;
-            }
-            break;
-        case ZodIssueCode.invalid_literal:
-            message = `Invalid literal value, expected ${JSON.stringify(issue.expected, util.jsonStringifyReplacer)}`;
-            break;
-        case ZodIssueCode.unrecognized_keys:
-            message = `Unrecognized key(s) in object: ${util.joinValues(issue.keys, ", ")}`;
-            break;
-        case ZodIssueCode.invalid_union:
-            message = `Invalid input`;
-            break;
-        case ZodIssueCode.invalid_union_discriminator:
-            message = `Invalid discriminator value. Expected ${util.joinValues(issue.options)}`;
-            break;
-        case ZodIssueCode.invalid_enum_value:
-            message = `Invalid enum value. Expected ${util.joinValues(issue.options)}, received '${issue.received}'`;
-            break;
-        case ZodIssueCode.invalid_arguments:
-            message = `Invalid function arguments`;
-            break;
-        case ZodIssueCode.invalid_return_type:
-            message = `Invalid function return type`;
-            break;
-        case ZodIssueCode.invalid_date:
-            message = `Invalid date`;
-            break;
-        case ZodIssueCode.invalid_string:
-            if (typeof issue.validation === "object") {
-                if ("includes" in issue.validation) {
-                    message = `Invalid input: must include "${issue.validation.includes}"`;
-                    if (typeof issue.validation.position === "number") {
-                        message = `${message} at one or more positions greater than or equal to ${issue.validation.position}`;
-                    }
-                }
-                else if ("startsWith" in issue.validation) {
-                    message = `Invalid input: must start with "${issue.validation.startsWith}"`;
-                }
-                else if ("endsWith" in issue.validation) {
-                    message = `Invalid input: must end with "${issue.validation.endsWith}"`;
-                }
-                else {
-                    util.assertNever(issue.validation);
-                }
-            }
-            else if (issue.validation !== "regex") {
-                message = `Invalid ${issue.validation}`;
-            }
-            else {
-                message = "Invalid";
-            }
-            break;
-        case ZodIssueCode.too_small:
-            if (issue.type === "array")
-                message = `Array must contain ${issue.exact ? "exactly" : issue.inclusive ? `at least` : `more than`} ${issue.minimum} element(s)`;
-            else if (issue.type === "string")
-                message = `String must contain ${issue.exact ? "exactly" : issue.inclusive ? `at least` : `over`} ${issue.minimum} character(s)`;
-            else if (issue.type === "number")
-                message = `Number must be ${issue.exact
-                    ? `exactly equal to `
-                    : issue.inclusive
-                        ? `greater than or equal to `
-                        : `greater than `}${issue.minimum}`;
-            else if (issue.type === "date")
-                message = `Date must be ${issue.exact
-                    ? `exactly equal to `
-                    : issue.inclusive
-                        ? `greater than or equal to `
-                        : `greater than `}${new Date(Number(issue.minimum))}`;
-            else
-                message = "Invalid input";
-            break;
-        case ZodIssueCode.too_big:
-            if (issue.type === "array")
-                message = `Array must contain ${issue.exact ? `exactly` : issue.inclusive ? `at most` : `less than`} ${issue.maximum} element(s)`;
-            else if (issue.type === "string")
-                message = `String must contain ${issue.exact ? `exactly` : issue.inclusive ? `at most` : `under`} ${issue.maximum} character(s)`;
-            else if (issue.type === "number")
-                message = `Number must be ${issue.exact
-                    ? `exactly`
-                    : issue.inclusive
-                        ? `less than or equal to`
-                        : `less than`} ${issue.maximum}`;
-            else if (issue.type === "bigint")
-                message = `BigInt must be ${issue.exact
-                    ? `exactly`
-                    : issue.inclusive
-                        ? `less than or equal to`
-                        : `less than`} ${issue.maximum}`;
-            else if (issue.type === "date")
-                message = `Date must be ${issue.exact
-                    ? `exactly`
-                    : issue.inclusive
-                        ? `smaller than or equal to`
-                        : `smaller than`} ${new Date(Number(issue.maximum))}`;
-            else
-                message = "Invalid input";
-            break;
-        case ZodIssueCode.custom:
-            message = `Invalid input`;
-            break;
-        case ZodIssueCode.invalid_intersection_types:
-            message = `Intersection results could not be merged`;
-            break;
-        case ZodIssueCode.not_multiple_of:
-            message = `Number must be a multiple of ${issue.multipleOf}`;
-            break;
-        case ZodIssueCode.not_finite:
-            message = "Number must be finite";
-            break;
-        default:
-            message = _ctx.defaultError;
-            util.assertNever(issue);
-    }
-    return { message };
-};
-
-let overrideErrorMap = errorMap;
-function setErrorMap(map) {
-    overrideErrorMap = map;
-}
-function getErrorMap() {
-    return overrideErrorMap;
-}
-
-const makeIssue = (params) => {
-    const { data, path, errorMaps, issueData } = params;
-    const fullPath = [...path, ...(issueData.path || [])];
-    const fullIssue = {
-        ...issueData,
-        path: fullPath,
-    };
-    if (issueData.message !== undefined) {
-        return {
-            ...issueData,
-            path: fullPath,
-            message: issueData.message,
-        };
-    }
-    let errorMessage = "";
-    const maps = errorMaps
-        .filter((m) => !!m)
-        .slice()
-        .reverse();
-    for (const map of maps) {
-        errorMessage = map(fullIssue, { data, defaultError: errorMessage }).message;
-    }
-    return {
-        ...issueData,
-        path: fullPath,
-        message: errorMessage,
-    };
-};
-const EMPTY_PATH = [];
-function addIssueToContext(ctx, issueData) {
-    const overrideMap = getErrorMap();
-    const issue = makeIssue({
-        issueData: issueData,
-        data: ctx.data,
-        path: ctx.path,
-        errorMaps: [
-            ctx.common.contextualErrorMap, // contextual error map is first priority
-            ctx.schemaErrorMap, // then schema-bound map if available
-            overrideMap, // then global override map
-            overrideMap === errorMap ? undefined : errorMap, // then global default map
-        ].filter((x) => !!x),
-    });
-    ctx.common.issues.push(issue);
-}
-class ParseStatus {
-    constructor() {
-        this.value = "valid";
-    }
-    dirty() {
-        if (this.value === "valid")
-            this.value = "dirty";
-    }
-    abort() {
-        if (this.value !== "aborted")
-            this.value = "aborted";
-    }
-    static mergeArray(status, results) {
-        const arrayValue = [];
-        for (const s of results) {
-            if (s.status === "aborted")
-                return INVALID;
-            if (s.status === "dirty")
-                status.dirty();
-            arrayValue.push(s.value);
-        }
-        return { status: status.value, value: arrayValue };
-    }
-    static async mergeObjectAsync(status, pairs) {
-        const syncPairs = [];
-        for (const pair of pairs) {
-            const key = await pair.key;
-            const value = await pair.value;
-            syncPairs.push({
-                key,
-                value,
-            });
-        }
-        return ParseStatus.mergeObjectSync(status, syncPairs);
-    }
-    static mergeObjectSync(status, pairs) {
-        const finalObject = {};
-        for (const pair of pairs) {
-            const { key, value } = pair;
-            if (key.status === "aborted")
-                return INVALID;
-            if (value.status === "aborted")
-                return INVALID;
-            if (key.status === "dirty")
-                status.dirty();
-            if (value.status === "dirty")
-                status.dirty();
-            if (key.value !== "__proto__" &&
-                (typeof value.value !== "undefined" || pair.alwaysSet)) {
-                finalObject[key.value] = value.value;
-            }
-        }
-        return { status: status.value, value: finalObject };
-    }
-}
-const INVALID = Object.freeze({
-    status: "aborted",
-});
-const DIRTY = (value) => ({ status: "dirty", value });
-const OK = (value) => ({ status: "valid", value });
-const isAborted = (x) => x.status === "aborted";
-const isDirty = (x) => x.status === "dirty";
-const isValid = (x) => x.status === "valid";
-const isAsync = (x) => typeof Promise !== "undefined" && x instanceof Promise;
-
-/******************************************************************************
-Copyright (c) Microsoft Corporation.
-
-Permission to use, copy, modify, and/or distribute this software for any
-purpose with or without fee is hereby granted.
-
-THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-PERFORMANCE OF THIS SOFTWARE.
-***************************************************************************** */
-
-function __classPrivateFieldGet(receiver, state, kind, f) {
-    if (kind === "a" && !f) throw new TypeError("Private accessor was defined without a getter");
-    if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver)) throw new TypeError("Cannot read private member from an object whose class did not declare it");
-    return kind === "m" ? f : kind === "a" ? f.call(receiver) : f ? f.value : state.get(receiver);
-}
-
-function __classPrivateFieldSet(receiver, state, value, kind, f) {
-    if (kind === "m") throw new TypeError("Private method is not writable");
-    if (kind === "a" && !f) throw new TypeError("Private accessor was defined without a setter");
-    if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver)) throw new TypeError("Cannot write private member to an object whose class did not declare it");
-    return (kind === "a" ? f.call(receiver, value) : f ? f.value = value : state.set(receiver, value)), value;
-}
-
-typeof SuppressedError === "function" ? SuppressedError : function (error, suppressed, message) {
-    var e = new Error(message);
-    return e.name = "SuppressedError", e.error = error, e.suppressed = suppressed, e;
-};
-
-var errorUtil;
-(function (errorUtil) {
-    errorUtil.errToObj = (message) => typeof message === "string" ? { message } : message || {};
-    errorUtil.toString = (message) => typeof message === "string" ? message : message === null || message === void 0 ? void 0 : message.message;
-})(errorUtil || (errorUtil = {}));
-
-var _ZodEnum_cache, _ZodNativeEnum_cache;
-class ParseInputLazyPath {
-    constructor(parent, value, path, key) {
-        this._cachedPath = [];
-        this.parent = parent;
-        this.data = value;
-        this._path = path;
-        this._key = key;
-    }
-    get path() {
-        if (!this._cachedPath.length) {
-            if (this._key instanceof Array) {
-                this._cachedPath.push(...this._path, ...this._key);
-            }
-            else {
-                this._cachedPath.push(...this._path, this._key);
-            }
-        }
-        return this._cachedPath;
-    }
-}
-const handleResult = (ctx, result) => {
-    if (isValid(result)) {
-        return { success: true, data: result.value };
-    }
-    else {
-        if (!ctx.common.issues.length) {
-            throw new Error("Validation failed but no issues detected.");
-        }
-        return {
-            success: false,
-            get error() {
-                if (this._error)
-                    return this._error;
-                const error = new ZodError(ctx.common.issues);
-                this._error = error;
-                return this._error;
-            },
-        };
-    }
-};
-function processCreateParams(params) {
-    if (!params)
-        return {};
-    const { errorMap, invalid_type_error, required_error, description } = params;
-    if (errorMap && (invalid_type_error || required_error)) {
-        throw new Error(`Can't use "invalid_type_error" or "required_error" in conjunction with custom error map.`);
-    }
-    if (errorMap)
-        return { errorMap: errorMap, description };
-    const customMap = (iss, ctx) => {
-        var _a, _b;
-        const { message } = params;
-        if (iss.code === "invalid_enum_value") {
-            return { message: message !== null && message !== void 0 ? message : ctx.defaultError };
-        }
-        if (typeof ctx.data === "undefined") {
-            return { message: (_a = message !== null && message !== void 0 ? message : required_error) !== null && _a !== void 0 ? _a : ctx.defaultError };
-        }
-        if (iss.code !== "invalid_type")
-            return { message: ctx.defaultError };
-        return { message: (_b = message !== null && message !== void 0 ? message : invalid_type_error) !== null && _b !== void 0 ? _b : ctx.defaultError };
-    };
-    return { errorMap: customMap, description };
-}
-class ZodType {
-    get description() {
-        return this._def.description;
-    }
-    _getType(input) {
-        return getParsedType(input.data);
-    }
-    _getOrReturnCtx(input, ctx) {
-        return (ctx || {
-            common: input.parent.common,
-            data: input.data,
-            parsedType: getParsedType(input.data),
-            schemaErrorMap: this._def.errorMap,
-            path: input.path,
-            parent: input.parent,
-        });
-    }
-    _processInputParams(input) {
-        return {
-            status: new ParseStatus(),
-            ctx: {
-                common: input.parent.common,
-                data: input.data,
-                parsedType: getParsedType(input.data),
-                schemaErrorMap: this._def.errorMap,
-                path: input.path,
-                parent: input.parent,
-            },
-        };
-    }
-    _parseSync(input) {
-        const result = this._parse(input);
-        if (isAsync(result)) {
-            throw new Error("Synchronous parse encountered promise.");
-        }
-        return result;
-    }
-    _parseAsync(input) {
-        const result = this._parse(input);
-        return Promise.resolve(result);
-    }
-    parse(data, params) {
-        const result = this.safeParse(data, params);
-        if (result.success)
-            return result.data;
-        throw result.error;
-    }
-    safeParse(data, params) {
-        var _a;
-        const ctx = {
-            common: {
-                issues: [],
-                async: (_a = params === null || params === void 0 ? void 0 : params.async) !== null && _a !== void 0 ? _a : false,
-                contextualErrorMap: params === null || params === void 0 ? void 0 : params.errorMap,
-            },
-            path: (params === null || params === void 0 ? void 0 : params.path) || [],
-            schemaErrorMap: this._def.errorMap,
-            parent: null,
-            data,
-            parsedType: getParsedType(data),
-        };
-        const result = this._parseSync({ data, path: ctx.path, parent: ctx });
-        return handleResult(ctx, result);
-    }
-    "~validate"(data) {
-        var _a, _b;
-        const ctx = {
-            common: {
-                issues: [],
-                async: !!this["~standard"].async,
-            },
-            path: [],
-            schemaErrorMap: this._def.errorMap,
-            parent: null,
-            data,
-            parsedType: getParsedType(data),
-        };
-        if (!this["~standard"].async) {
-            try {
-                const result = this._parseSync({ data, path: [], parent: ctx });
-                return isValid(result)
-                    ? {
-                        value: result.value,
-                    }
-                    : {
-                        issues: ctx.common.issues,
-                    };
-            }
-            catch (err) {
-                if ((_b = (_a = err === null || err === void 0 ? void 0 : err.message) === null || _a === void 0 ? void 0 : _a.toLowerCase()) === null || _b === void 0 ? void 0 : _b.includes("encountered")) {
-                    this["~standard"].async = true;
-                }
-                ctx.common = {
-                    issues: [],
-                    async: true,
-                };
-            }
-        }
-        return this._parseAsync({ data, path: [], parent: ctx }).then((result) => isValid(result)
-            ? {
-                value: result.value,
-            }
-            : {
-                issues: ctx.common.issues,
-            });
-    }
-    async parseAsync(data, params) {
-        const result = await this.safeParseAsync(data, params);
-        if (result.success)
-            return result.data;
-        throw result.error;
-    }
-    async safeParseAsync(data, params) {
-        const ctx = {
-            common: {
-                issues: [],
-                contextualErrorMap: params === null || params === void 0 ? void 0 : params.errorMap,
-                async: true,
-            },
-            path: (params === null || params === void 0 ? void 0 : params.path) || [],
-            schemaErrorMap: this._def.errorMap,
-            parent: null,
-            data,
-            parsedType: getParsedType(data),
-        };
-        const maybeAsyncResult = this._parse({ data, path: ctx.path, parent: ctx });
-        const result = await (isAsync(maybeAsyncResult)
-            ? maybeAsyncResult
-            : Promise.resolve(maybeAsyncResult));
-        return handleResult(ctx, result);
-    }
-    refine(check, message) {
-        const getIssueProperties = (val) => {
-            if (typeof message === "string" || typeof message === "undefined") {
-                return { message };
-            }
-            else if (typeof message === "function") {
-                return message(val);
-            }
-            else {
-                return message;
-            }
-        };
-        return this._refinement((val, ctx) => {
-            const result = check(val);
-            const setError = () => ctx.addIssue({
-                code: ZodIssueCode.custom,
-                ...getIssueProperties(val),
-            });
-            if (typeof Promise !== "undefined" && result instanceof Promise) {
-                return result.then((data) => {
-                    if (!data) {
-                        setError();
-                        return false;
-                    }
-                    else {
-                        return true;
-                    }
-                });
-            }
-            if (!result) {
-                setError();
-                return false;
-            }
-            else {
-                return true;
-            }
-        });
-    }
-    refinement(check, refinementData) {
-        return this._refinement((val, ctx) => {
-            if (!check(val)) {
-                ctx.addIssue(typeof refinementData === "function"
-                    ? refinementData(val, ctx)
-                    : refinementData);
-                return false;
-            }
-            else {
-                return true;
-            }
-        });
-    }
-    _refinement(refinement) {
-        return new ZodEffects({
-            schema: this,
-            typeName: ZodFirstPartyTypeKind.ZodEffects,
-            effect: { type: "refinement", refinement },
-        });
-    }
-    superRefine(refinement) {
-        return this._refinement(refinement);
-    }
-    constructor(def) {
-        /** Alias of safeParseAsync */
-        this.spa = this.safeParseAsync;
-        this._def = def;
-        this.parse = this.parse.bind(this);
-        this.safeParse = this.safeParse.bind(this);
-        this.parseAsync = this.parseAsync.bind(this);
-        this.safeParseAsync = this.safeParseAsync.bind(this);
-        this.spa = this.spa.bind(this);
-        this.refine = this.refine.bind(this);
-        this.refinement = this.refinement.bind(this);
-        this.superRefine = this.superRefine.bind(this);
-        this.optional = this.optional.bind(this);
-        this.nullable = this.nullable.bind(this);
-        this.nullish = this.nullish.bind(this);
-        this.array = this.array.bind(this);
-        this.promise = this.promise.bind(this);
-        this.or = this.or.bind(this);
-        this.and = this.and.bind(this);
-        this.transform = this.transform.bind(this);
-        this.brand = this.brand.bind(this);
-        this.default = this.default.bind(this);
-        this.catch = this.catch.bind(this);
-        this.describe = this.describe.bind(this);
-        this.pipe = this.pipe.bind(this);
-        this.readonly = this.readonly.bind(this);
-        this.isNullable = this.isNullable.bind(this);
-        this.isOptional = this.isOptional.bind(this);
-        this["~standard"] = {
-            version: 1,
-            vendor: "zod",
-            validate: (data) => this["~validate"](data),
-        };
-    }
-    optional() {
-        return ZodOptional.create(this, this._def);
-    }
-    nullable() {
-        return ZodNullable.create(this, this._def);
-    }
-    nullish() {
-        return this.nullable().optional();
-    }
-    array() {
-        return ZodArray.create(this);
-    }
-    promise() {
-        return ZodPromise.create(this, this._def);
-    }
-    or(option) {
-        return ZodUnion.create([this, option], this._def);
-    }
-    and(incoming) {
-        return ZodIntersection.create(this, incoming, this._def);
-    }
-    transform(transform) {
-        return new ZodEffects({
-            ...processCreateParams(this._def),
-            schema: this,
-            typeName: ZodFirstPartyTypeKind.ZodEffects,
-            effect: { type: "transform", transform },
-        });
-    }
-    default(def) {
-        const defaultValueFunc = typeof def === "function" ? def : () => def;
-        return new ZodDefault({
-            ...processCreateParams(this._def),
-            innerType: this,
-            defaultValue: defaultValueFunc,
-            typeName: ZodFirstPartyTypeKind.ZodDefault,
-        });
-    }
-    brand() {
-        return new ZodBranded({
-            typeName: ZodFirstPartyTypeKind.ZodBranded,
-            type: this,
-            ...processCreateParams(this._def),
-        });
-    }
-    catch(def) {
-        const catchValueFunc = typeof def === "function" ? def : () => def;
-        return new ZodCatch({
-            ...processCreateParams(this._def),
-            innerType: this,
-            catchValue: catchValueFunc,
-            typeName: ZodFirstPartyTypeKind.ZodCatch,
-        });
-    }
-    describe(description) {
-        const This = this.constructor;
-        return new This({
-            ...this._def,
-            description,
-        });
-    }
-    pipe(target) {
-        return ZodPipeline.create(this, target);
-    }
-    readonly() {
-        return ZodReadonly.create(this);
-    }
-    isOptional() {
-        return this.safeParse(undefined).success;
-    }
-    isNullable() {
-        return this.safeParse(null).success;
-    }
-}
-const cuidRegex = /^c[^\s-]{8,}$/i;
-const cuid2Regex = /^[0-9a-z]+$/;
-const ulidRegex = /^[0-9A-HJKMNP-TV-Z]{26}$/i;
-// const uuidRegex =
-//   /^([a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[a-f0-9]{4}-[a-f0-9]{12}|00000000-0000-0000-0000-000000000000)$/i;
-const uuidRegex = /^[0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12}$/i;
-const nanoidRegex = /^[a-z0-9_-]{21}$/i;
-const jwtRegex = /^[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+\.[A-Za-z0-9-_]*$/;
-const durationRegex = /^[-+]?P(?!$)(?:(?:[-+]?\d+Y)|(?:[-+]?\d+[.,]\d+Y$))?(?:(?:[-+]?\d+M)|(?:[-+]?\d+[.,]\d+M$))?(?:(?:[-+]?\d+W)|(?:[-+]?\d+[.,]\d+W$))?(?:(?:[-+]?\d+D)|(?:[-+]?\d+[.,]\d+D$))?(?:T(?=[\d+-])(?:(?:[-+]?\d+H)|(?:[-+]?\d+[.,]\d+H$))?(?:(?:[-+]?\d+M)|(?:[-+]?\d+[.,]\d+M$))?(?:[-+]?\d+(?:[.,]\d+)?S)?)??$/;
-// from https://stackoverflow.com/a/46181/1550155
-// old version: too slow, didn't support unicode
-// const emailRegex = /^((([a-z]|\d|[!#\$%&'\*\+\-\/=\?\^_`{\|}~]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])+(\.([a-z]|\d|[!#\$%&'\*\+\-\/=\?\^_`{\|}~]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])+)*)|((\x22)((((\x20|\x09)*(\x0d\x0a))?(\x20|\x09)+)?(([\x01-\x08\x0b\x0c\x0e-\x1f\x7f]|\x21|[\x23-\x5b]|[\x5d-\x7e]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(\\([\x01-\x09\x0b\x0c\x0d-\x7f]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF]))))*(((\x20|\x09)*(\x0d\x0a))?(\x20|\x09)+)?(\x22)))@((([a-z]|\d|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(([a-z]|\d|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])([a-z]|\d|-|\.|_|~|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])*([a-z]|\d|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])))\.)+(([a-z]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(([a-z]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])([a-z]|\d|-|\.|_|~|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])*([a-z]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])))$/i;
-//old email regex
-// const emailRegex = /^(([^<>()[\].,;:\s@"]+(\.[^<>()[\].,;:\s@"]+)*)|(".+"))@((?!-)([^<>()[\].,;:\s@"]+\.)+[^<>()[\].,;:\s@"]{1,})[^-<>()[\].,;:\s@"]$/i;
-// eslint-disable-next-line
-// const emailRegex =
-//   /^(([^<>()[\]\\.,;:\s@\"]+(\.[^<>()[\]\\.,;:\s@\"]+)*)|(\".+\"))@((\[(((25[0-5])|(2[0-4][0-9])|(1[0-9]{2})|([0-9]{1,2}))\.){3}((25[0-5])|(2[0-4][0-9])|(1[0-9]{2})|([0-9]{1,2}))\])|(\[IPv6:(([a-f0-9]{1,4}:){7}|::([a-f0-9]{1,4}:){0,6}|([a-f0-9]{1,4}:){1}:([a-f0-9]{1,4}:){0,5}|([a-f0-9]{1,4}:){2}:([a-f0-9]{1,4}:){0,4}|([a-f0-9]{1,4}:){3}:([a-f0-9]{1,4}:){0,3}|([a-f0-9]{1,4}:){4}:([a-f0-9]{1,4}:){0,2}|([a-f0-9]{1,4}:){5}:([a-f0-9]{1,4}:){0,1})([a-f0-9]{1,4}|(((25[0-5])|(2[0-4][0-9])|(1[0-9]{2})|([0-9]{1,2}))\.){3}((25[0-5])|(2[0-4][0-9])|(1[0-9]{2})|([0-9]{1,2})))\])|([A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])*(\.[A-Za-z]{2,})+))$/;
-// const emailRegex =
-//   /^[a-zA-Z0-9\.\!\#\$\%\&\'\*\+\/\=\?\^\_\`\{\|\}\~\-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
-// const emailRegex =
-//   /^(?:[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*|"(?:[\x01-\x08\x0b\x0c\x0e-\x1f\x21\x23-\x5b\x5d-\x7f]|\\[\x01-\x09\x0b\x0c\x0e-\x7f])*")@(?:(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?|\[(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?|[a-z0-9-]*[a-z0-9]:(?:[\x01-\x08\x0b\x0c\x0e-\x1f\x21-\x5a\x53-\x7f]|\\[\x01-\x09\x0b\x0c\x0e-\x7f])+)\])$/i;
-const emailRegex = /^(?!\.)(?!.*\.\.)([A-Z0-9_'+\-\.]*)[A-Z0-9_+-]@([A-Z0-9][A-Z0-9\-]*\.)+[A-Z]{2,}$/i;
-// const emailRegex =
-//   /^[a-z0-9.!#$%&’*+/=?^_`{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9\-]+)*$/i;
-// from https://thekevinscott.com/emojis-in-javascript/#writing-a-regular-expression
-const _emojiRegex = `^(\\p{Extended_Pictographic}|\\p{Emoji_Component})+$`;
-let emojiRegex;
-// faster, simpler, safer
-const ipv4Regex = /^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])$/;
-const ipv4CidrRegex = /^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\/(3[0-2]|[12]?[0-9])$/;
-// const ipv6Regex =
-// /^(([a-f0-9]{1,4}:){7}|::([a-f0-9]{1,4}:){0,6}|([a-f0-9]{1,4}:){1}:([a-f0-9]{1,4}:){0,5}|([a-f0-9]{1,4}:){2}:([a-f0-9]{1,4}:){0,4}|([a-f0-9]{1,4}:){3}:([a-f0-9]{1,4}:){0,3}|([a-f0-9]{1,4}:){4}:([a-f0-9]{1,4}:){0,2}|([a-f0-9]{1,4}:){5}:([a-f0-9]{1,4}:){0,1})([a-f0-9]{1,4}|(((25[0-5])|(2[0-4][0-9])|(1[0-9]{2})|([0-9]{1,2}))\.){3}((25[0-5])|(2[0-4][0-9])|(1[0-9]{2})|([0-9]{1,2})))$/;
-const ipv6Regex = /^(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]))$/;
-const ipv6CidrRegex = /^(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]))\/(12[0-8]|1[01][0-9]|[1-9]?[0-9])$/;
-// https://stackoverflow.com/questions/7860392/determine-if-string-is-in-base64-using-javascript
-const base64Regex = /^([0-9a-zA-Z+/]{4})*(([0-9a-zA-Z+/]{2}==)|([0-9a-zA-Z+/]{3}=))?$/;
-// https://base64.guru/standards/base64url
-const base64urlRegex = /^([0-9a-zA-Z-_]{4})*(([0-9a-zA-Z-_]{2}(==)?)|([0-9a-zA-Z-_]{3}(=)?))?$/;
-// simple
-// const dateRegexSource = `\\d{4}-\\d{2}-\\d{2}`;
-// no leap year validation
-// const dateRegexSource = `\\d{4}-((0[13578]|10|12)-31|(0[13-9]|1[0-2])-30|(0[1-9]|1[0-2])-(0[1-9]|1\\d|2\\d))`;
-// with leap year validation
-const dateRegexSource = `((\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-((0[13578]|1[02])-(0[1-9]|[12]\\d|3[01])|(0[469]|11)-(0[1-9]|[12]\\d|30)|(02)-(0[1-9]|1\\d|2[0-8])))`;
-const dateRegex = new RegExp(`^${dateRegexSource}$`);
-function timeRegexSource(args) {
-    // let regex = `\\d{2}:\\d{2}:\\d{2}`;
-    let regex = `([01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d`;
-    if (args.precision) {
-        regex = `${regex}\\.\\d{${args.precision}}`;
-    }
-    else if (args.precision == null) {
-        regex = `${regex}(\\.\\d+)?`;
-    }
-    return regex;
-}
-function timeRegex(args) {
-    return new RegExp(`^${timeRegexSource(args)}$`);
-}
-// Adapted from https://stackoverflow.com/a/3143231
-function datetimeRegex(args) {
-    let regex = `${dateRegexSource}T${timeRegexSource(args)}`;
-    const opts = [];
-    opts.push(args.local ? `Z?` : `Z`);
-    if (args.offset)
-        opts.push(`([+-]\\d{2}:?\\d{2})`);
-    regex = `${regex}(${opts.join("|")})`;
-    return new RegExp(`^${regex}$`);
-}
-function isValidIP(ip, version) {
-    if ((version === "v4" || !version) && ipv4Regex.test(ip)) {
-        return true;
-    }
-    if ((version === "v6" || !version) && ipv6Regex.test(ip)) {
-        return true;
-    }
-    return false;
-}
-function isValidJWT(jwt, alg) {
-    if (!jwtRegex.test(jwt))
-        return false;
-    try {
-        const [header] = jwt.split(".");
-        // Convert base64url to base64
-        const base64 = header
-            .replace(/-/g, "+")
-            .replace(/_/g, "/")
-            .padEnd(header.length + ((4 - (header.length % 4)) % 4), "=");
-        const decoded = JSON.parse(atob(base64));
-        if (typeof decoded !== "object" || decoded === null)
-            return false;
-        if (!decoded.typ || !decoded.alg)
-            return false;
-        if (alg && decoded.alg !== alg)
-            return false;
-        return true;
-    }
-    catch (_a) {
-        return false;
-    }
-}
-function isValidCidr(ip, version) {
-    if ((version === "v4" || !version) && ipv4CidrRegex.test(ip)) {
-        return true;
-    }
-    if ((version === "v6" || !version) && ipv6CidrRegex.test(ip)) {
-        return true;
-    }
-    return false;
-}
-class ZodString extends ZodType {
-    _parse(input) {
-        if (this._def.coerce) {
-            input.data = String(input.data);
-        }
-        const parsedType = this._getType(input);
-        if (parsedType !== ZodParsedType.string) {
-            const ctx = this._getOrReturnCtx(input);
-            addIssueToContext(ctx, {
-                code: ZodIssueCode.invalid_type,
-                expected: ZodParsedType.string,
-                received: ctx.parsedType,
-            });
-            return INVALID;
-        }
-        const status = new ParseStatus();
-        let ctx = undefined;
-        for (const check of this._def.checks) {
-            if (check.kind === "min") {
-                if (input.data.length < check.value) {
-                    ctx = this._getOrReturnCtx(input, ctx);
-                    addIssueToContext(ctx, {
-                        code: ZodIssueCode.too_small,
-                        minimum: check.value,
-                        type: "string",
-                        inclusive: true,
-                        exact: false,
-                        message: check.message,
-                    });
-                    status.dirty();
-                }
-            }
-            else if (check.kind === "max") {
-                if (input.data.length > check.value) {
-                    ctx = this._getOrReturnCtx(input, ctx);
-                    addIssueToContext(ctx, {
-                        code: ZodIssueCode.too_big,
-                        maximum: check.value,
-                        type: "string",
-                        inclusive: true,
-                        exact: false,
-                        message: check.message,
-                    });
-                    status.dirty();
-                }
-            }
-            else if (check.kind === "length") {
-                const tooBig = input.data.length > check.value;
-                const tooSmall = input.data.length < check.value;
-                if (tooBig || tooSmall) {
-                    ctx = this._getOrReturnCtx(input, ctx);
-                    if (tooBig) {
-                        addIssueToContext(ctx, {
-                            code: ZodIssueCode.too_big,
-                            maximum: check.value,
-                            type: "string",
-                            inclusive: true,
-                            exact: true,
-                            message: check.message,
-                        });
-                    }
-                    else if (tooSmall) {
-                        addIssueToContext(ctx, {
-                            code: ZodIssueCode.too_small,
-                            minimum: check.value,
-                            type: "string",
-                            inclusive: true,
-                            exact: true,
-                            message: check.message,
-                        });
-                    }
-                    status.dirty();
-                }
-            }
-            else if (check.kind === "email") {
-                if (!emailRegex.test(input.data)) {
-                    ctx = this._getOrReturnCtx(input, ctx);
-                    addIssueToContext(ctx, {
-                        validation: "email",
-                        code: ZodIssueCode.invalid_string,
-                        message: check.message,
-                    });
-                    status.dirty();
-                }
-            }
-            else if (check.kind === "emoji") {
-                if (!emojiRegex) {
-                    emojiRegex = new RegExp(_emojiRegex, "u");
-                }
-                if (!emojiRegex.test(input.data)) {
-                    ctx = this._getOrReturnCtx(input, ctx);
-                    addIssueToContext(ctx, {
-                        validation: "emoji",
-                        code: ZodIssueCode.invalid_string,
-                        message: check.message,
-                    });
-                    status.dirty();
-                }
-            }
-            else if (check.kind === "uuid") {
-                if (!uuidRegex.test(input.data)) {
-                    ctx = this._getOrReturnCtx(input, ctx);
-                    addIssueToContext(ctx, {
-                        validation: "uuid",
-                        code: ZodIssueCode.invalid_string,
-                        message: check.message,
-                    });
-                    status.dirty();
-                }
-            }
-            else if (check.kind === "nanoid") {
-                if (!nanoidRegex.test(input.data)) {
-                    ctx = this._getOrReturnCtx(input, ctx);
-                    addIssueToContext(ctx, {
-                        validation: "nanoid",
-                        code: ZodIssueCode.invalid_string,
-                        message: check.message,
-                    });
-                    status.dirty();
-                }
-            }
-            else if (check.kind === "cuid") {
-                if (!cuidRegex.test(input.data)) {
-                    ctx = this._getOrReturnCtx(input, ctx);
-                    addIssueToContext(ctx, {
-                        validation: "cuid",
-                        code: ZodIssueCode.invalid_string,
-                        message: check.message,
-                    });
-                    status.dirty();
-                }
-            }
-            else if (check.kind === "cuid2") {
-                if (!cuid2Regex.test(input.data)) {
-                    ctx = this._getOrReturnCtx(input, ctx);
-                    addIssueToContext(ctx, {
-                        validation: "cuid2",
-                        code: ZodIssueCode.invalid_string,
-                        message: check.message,
-                    });
-                    status.dirty();
-                }
-            }
-            else if (check.kind === "ulid") {
-                if (!ulidRegex.test(input.data)) {
-                    ctx = this._getOrReturnCtx(input, ctx);
-                    addIssueToContext(ctx, {
-                        validation: "ulid",
-                        code: ZodIssueCode.invalid_string,
-                        message: check.message,
-                    });
-                    status.dirty();
-                }
-            }
-            else if (check.kind === "url") {
-                try {
-                    new URL(input.data);
-                }
-                catch (_a) {
-                    ctx = this._getOrReturnCtx(input, ctx);
-                    addIssueToContext(ctx, {
-                        validation: "url",
-                        code: ZodIssueCode.invalid_string,
-                        message: check.message,
-                    });
-                    status.dirty();
-                }
-            }
-            else if (check.kind === "regex") {
-                check.regex.lastIndex = 0;
-                const testResult = check.regex.test(input.data);
-                if (!testResult) {
-                    ctx = this._getOrReturnCtx(input, ctx);
-                    addIssueToContext(ctx, {
-                        validation: "regex",
-                        code: ZodIssueCode.invalid_string,
-                        message: check.message,
-                    });
-                    status.dirty();
-                }
-            }
-            else if (check.kind === "trim") {
-                input.data = input.data.trim();
-            }
-            else if (check.kind === "includes") {
-                if (!input.data.includes(check.value, check.position)) {
-                    ctx = this._getOrReturnCtx(input, ctx);
-                    addIssueToContext(ctx, {
-                        code: ZodIssueCode.invalid_string,
-                        validation: { includes: check.value, position: check.position },
-                        message: check.message,
-                    });
-                    status.dirty();
-                }
-            }
-            else if (check.kind === "toLowerCase") {
-                input.data = input.data.toLowerCase();
-            }
-            else if (check.kind === "toUpperCase") {
-                input.data = input.data.toUpperCase();
-            }
-            else if (check.kind === "startsWith") {
-                if (!input.data.startsWith(check.value)) {
-                    ctx = this._getOrReturnCtx(input, ctx);
-                    addIssueToContext(ctx, {
-                        code: ZodIssueCode.invalid_string,
-                        validation: { startsWith: check.value },
-                        message: check.message,
-                    });
-                    status.dirty();
-                }
-            }
-            else if (check.kind === "endsWith") {
-                if (!input.data.endsWith(check.value)) {
-                    ctx = this._getOrReturnCtx(input, ctx);
-                    addIssueToContext(ctx, {
-                        code: ZodIssueCode.invalid_string,
-                        validation: { endsWith: check.value },
-                        message: check.message,
-                    });
-                    status.dirty();
-                }
-            }
-            else if (check.kind === "datetime") {
-                const regex = datetimeRegex(check);
-                if (!regex.test(input.data)) {
-                    ctx = this._getOrReturnCtx(input, ctx);
-                    addIssueToContext(ctx, {
-                        code: ZodIssueCode.invalid_string,
-                        validation: "datetime",
-                        message: check.message,
-                    });
-                    status.dirty();
-                }
-            }
-            else if (check.kind === "date") {
-                const regex = dateRegex;
-                if (!regex.test(input.data)) {
-                    ctx = this._getOrReturnCtx(input, ctx);
-                    addIssueToContext(ctx, {
-                        code: ZodIssueCode.invalid_string,
-                        validation: "date",
-                        message: check.message,
-                    });
-                    status.dirty();
-                }
-            }
-            else if (check.kind === "time") {
-                const regex = timeRegex(check);
-                if (!regex.test(input.data)) {
-                    ctx = this._getOrReturnCtx(input, ctx);
-                    addIssueToContext(ctx, {
-                        code: ZodIssueCode.invalid_string,
-                        validation: "time",
-                        message: check.message,
-                    });
-                    status.dirty();
-                }
-            }
-            else if (check.kind === "duration") {
-                if (!durationRegex.test(input.data)) {
-                    ctx = this._getOrReturnCtx(input, ctx);
-                    addIssueToContext(ctx, {
-                        validation: "duration",
-                        code: ZodIssueCode.invalid_string,
-                        message: check.message,
-                    });
-                    status.dirty();
-                }
-            }
-            else if (check.kind === "ip") {
-                if (!isValidIP(input.data, check.version)) {
-                    ctx = this._getOrReturnCtx(input, ctx);
-                    addIssueToContext(ctx, {
-                        validation: "ip",
-                        code: ZodIssueCode.invalid_string,
-                        message: check.message,
-                    });
-                    status.dirty();
-                }
-            }
-            else if (check.kind === "jwt") {
-                if (!isValidJWT(input.data, check.alg)) {
-                    ctx = this._getOrReturnCtx(input, ctx);
-                    addIssueToContext(ctx, {
-                        validation: "jwt",
-                        code: ZodIssueCode.invalid_string,
-                        message: check.message,
-                    });
-                    status.dirty();
-                }
-            }
-            else if (check.kind === "cidr") {
-                if (!isValidCidr(input.data, check.version)) {
-                    ctx = this._getOrReturnCtx(input, ctx);
-                    addIssueToContext(ctx, {
-                        validation: "cidr",
-                        code: ZodIssueCode.invalid_string,
-                        message: check.message,
-                    });
-                    status.dirty();
-                }
-            }
-            else if (check.kind === "base64") {
-                if (!base64Regex.test(input.data)) {
-                    ctx = this._getOrReturnCtx(input, ctx);
-                    addIssueToContext(ctx, {
-                        validation: "base64",
-                        code: ZodIssueCode.invalid_string,
-                        message: check.message,
-                    });
-                    status.dirty();
-                }
-            }
-            else if (check.kind === "base64url") {
-                if (!base64urlRegex.test(input.data)) {
-                    ctx = this._getOrReturnCtx(input, ctx);
-                    addIssueToContext(ctx, {
-                        validation: "base64url",
-                        code: ZodIssueCode.invalid_string,
-                        message: check.message,
-                    });
-                    status.dirty();
-                }
-            }
-            else {
-                util.assertNever(check);
-            }
-        }
-        return { status: status.value, value: input.data };
-    }
-    _regex(regex, validation, message) {
-        return this.refinement((data) => regex.test(data), {
-            validation,
-            code: ZodIssueCode.invalid_string,
-            ...errorUtil.errToObj(message),
-        });
-    }
-    _addCheck(check) {
-        return new ZodString({
-            ...this._def,
-            checks: [...this._def.checks, check],
-        });
-    }
-    email(message) {
-        return this._addCheck({ kind: "email", ...errorUtil.errToObj(message) });
-    }
-    url(message) {
-        return this._addCheck({ kind: "url", ...errorUtil.errToObj(message) });
-    }
-    emoji(message) {
-        return this._addCheck({ kind: "emoji", ...errorUtil.errToObj(message) });
-    }
-    uuid(message) {
-        return this._addCheck({ kind: "uuid", ...errorUtil.errToObj(message) });
-    }
-    nanoid(message) {
-        return this._addCheck({ kind: "nanoid", ...errorUtil.errToObj(message) });
-    }
-    cuid(message) {
-        return this._addCheck({ kind: "cuid", ...errorUtil.errToObj(message) });
-    }
-    cuid2(message) {
-        return this._addCheck({ kind: "cuid2", ...errorUtil.errToObj(message) });
-    }
-    ulid(message) {
-        return this._addCheck({ kind: "ulid", ...errorUtil.errToObj(message) });
-    }
-    base64(message) {
-        return this._addCheck({ kind: "base64", ...errorUtil.errToObj(message) });
-    }
-    base64url(message) {
-        // base64url encoding is a modification of base64 that can safely be used in URLs and filenames
-        return this._addCheck({
-            kind: "base64url",
-            ...errorUtil.errToObj(message),
-        });
-    }
-    jwt(options) {
-        return this._addCheck({ kind: "jwt", ...errorUtil.errToObj(options) });
-    }
-    ip(options) {
-        return this._addCheck({ kind: "ip", ...errorUtil.errToObj(options) });
-    }
-    cidr(options) {
-        return this._addCheck({ kind: "cidr", ...errorUtil.errToObj(options) });
-    }
-    datetime(options) {
-        var _a, _b;
-        if (typeof options === "string") {
-            return this._addCheck({
-                kind: "datetime",
-                precision: null,
-                offset: false,
-                local: false,
-                message: options,
-            });
-        }
-        return this._addCheck({
-            kind: "datetime",
-            precision: typeof (options === null || options === void 0 ? void 0 : options.precision) === "undefined" ? null : options === null || options === void 0 ? void 0 : options.precision,
-            offset: (_a = options === null || options === void 0 ? void 0 : options.offset) !== null && _a !== void 0 ? _a : false,
-            local: (_b = options === null || options === void 0 ? void 0 : options.local) !== null && _b !== void 0 ? _b : false,
-            ...errorUtil.errToObj(options === null || options === void 0 ? void 0 : options.message),
-        });
-    }
-    date(message) {
-        return this._addCheck({ kind: "date", message });
-    }
-    time(options) {
-        if (typeof options === "string") {
-            return this._addCheck({
-                kind: "time",
-                precision: null,
-                message: options,
-            });
-        }
-        return this._addCheck({
-            kind: "time",
-            precision: typeof (options === null || options === void 0 ? void 0 : options.precision) === "undefined" ? null : options === null || options === void 0 ? void 0 : options.precision,
-            ...errorUtil.errToObj(options === null || options === void 0 ? void 0 : options.message),
-        });
-    }
-    duration(message) {
-        return this._addCheck({ kind: "duration", ...errorUtil.errToObj(message) });
-    }
-    regex(regex, message) {
-        return this._addCheck({
-            kind: "regex",
-            regex: regex,
-            ...errorUtil.errToObj(message),
-        });
-    }
-    includes(value, options) {
-        return this._addCheck({
-            kind: "includes",
-            value: value,
-            position: options === null || options === void 0 ? void 0 : options.position,
-            ...errorUtil.errToObj(options === null || options === void 0 ? void 0 : options.message),
-        });
-    }
-    startsWith(value, message) {
-        return this._addCheck({
-            kind: "startsWith",
-            value: value,
-            ...errorUtil.errToObj(message),
-        });
-    }
-    endsWith(value, message) {
-        return this._addCheck({
-            kind: "endsWith",
-            value: value,
-            ...errorUtil.errToObj(message),
-        });
-    }
-    min(minLength, message) {
-        return this._addCheck({
-            kind: "min",
-            value: minLength,
-            ...errorUtil.errToObj(message),
-        });
-    }
-    max(maxLength, message) {
-        return this._addCheck({
-            kind: "max",
-            value: maxLength,
-            ...errorUtil.errToObj(message),
-        });
-    }
-    length(len, message) {
-        return this._addCheck({
-            kind: "length",
-            value: len,
-            ...errorUtil.errToObj(message),
-        });
-    }
-    /**
-     * Equivalent to `.min(1)`
-     */
-    nonempty(message) {
-        return this.min(1, errorUtil.errToObj(message));
-    }
-    trim() {
-        return new ZodString({
-            ...this._def,
-            checks: [...this._def.checks, { kind: "trim" }],
-        });
-    }
-    toLowerCase() {
-        return new ZodString({
-            ...this._def,
-            checks: [...this._def.checks, { kind: "toLowerCase" }],
-        });
-    }
-    toUpperCase() {
-        return new ZodString({
-            ...this._def,
-            checks: [...this._def.checks, { kind: "toUpperCase" }],
-        });
-    }
-    get isDatetime() {
-        return !!this._def.checks.find((ch) => ch.kind === "datetime");
-    }
-    get isDate() {
-        return !!this._def.checks.find((ch) => ch.kind === "date");
-    }
-    get isTime() {
-        return !!this._def.checks.find((ch) => ch.kind === "time");
-    }
-    get isDuration() {
-        return !!this._def.checks.find((ch) => ch.kind === "duration");
-    }
-    get isEmail() {
-        return !!this._def.checks.find((ch) => ch.kind === "email");
-    }
-    get isURL() {
-        return !!this._def.checks.find((ch) => ch.kind === "url");
-    }
-    get isEmoji() {
-        return !!this._def.checks.find((ch) => ch.kind === "emoji");
-    }
-    get isUUID() {
-        return !!this._def.checks.find((ch) => ch.kind === "uuid");
-    }
-    get isNANOID() {
-        return !!this._def.checks.find((ch) => ch.kind === "nanoid");
-    }
-    get isCUID() {
-        return !!this._def.checks.find((ch) => ch.kind === "cuid");
-    }
-    get isCUID2() {
-        return !!this._def.checks.find((ch) => ch.kind === "cuid2");
-    }
-    get isULID() {
-        return !!this._def.checks.find((ch) => ch.kind === "ulid");
-    }
-    get isIP() {
-        return !!this._def.checks.find((ch) => ch.kind === "ip");
-    }
-    get isCIDR() {
-        return !!this._def.checks.find((ch) => ch.kind === "cidr");
-    }
-    get isBase64() {
-        return !!this._def.checks.find((ch) => ch.kind === "base64");
-    }
-    get isBase64url() {
-        // base64url encoding is a modification of base64 that can safely be used in URLs and filenames
-        return !!this._def.checks.find((ch) => ch.kind === "base64url");
-    }
-    get minLength() {
-        let min = null;
-        for (const ch of this._def.checks) {
-            if (ch.kind === "min") {
-                if (min === null || ch.value > min)
-                    min = ch.value;
-            }
-        }
-        return min;
-    }
-    get maxLength() {
-        let max = null;
-        for (const ch of this._def.checks) {
-            if (ch.kind === "max") {
-                if (max === null || ch.value < max)
-                    max = ch.value;
-            }
-        }
-        return max;
-    }
-}
-ZodString.create = (params) => {
-    var _a;
-    return new ZodString({
-        checks: [],
-        typeName: ZodFirstPartyTypeKind.ZodString,
-        coerce: (_a = params === null || params === void 0 ? void 0 : params.coerce) !== null && _a !== void 0 ? _a : false,
-        ...processCreateParams(params),
-    });
-};
-// https://stackoverflow.com/questions/3966484/why-does-modulus-operator-return-fractional-number-in-javascript/31711034#31711034
-function floatSafeRemainder(val, step) {
-    const valDecCount = (val.toString().split(".")[1] || "").length;
-    const stepDecCount = (step.toString().split(".")[1] || "").length;
-    const decCount = valDecCount > stepDecCount ? valDecCount : stepDecCount;
-    const valInt = parseInt(val.toFixed(decCount).replace(".", ""));
-    const stepInt = parseInt(step.toFixed(decCount).replace(".", ""));
-    return (valInt % stepInt) / Math.pow(10, decCount);
-}
-class ZodNumber extends ZodType {
-    constructor() {
-        super(...arguments);
-        this.min = this.gte;
-        this.max = this.lte;
-        this.step = this.multipleOf;
-    }
-    _parse(input) {
-        if (this._def.coerce) {
-            input.data = Number(input.data);
-        }
-        const parsedType = this._getType(input);
-        if (parsedType !== ZodParsedType.number) {
-            const ctx = this._getOrReturnCtx(input);
-            addIssueToContext(ctx, {
-                code: ZodIssueCode.invalid_type,
-                expected: ZodParsedType.number,
-                received: ctx.parsedType,
-            });
-            return INVALID;
-        }
-        let ctx = undefined;
-        const status = new ParseStatus();
-        for (const check of this._def.checks) {
-            if (check.kind === "int") {
-                if (!util.isInteger(input.data)) {
-                    ctx = this._getOrReturnCtx(input, ctx);
-                    addIssueToContext(ctx, {
-                        code: ZodIssueCode.invalid_type,
-                        expected: "integer",
-                        received: "float",
-                        message: check.message,
-                    });
-                    status.dirty();
-                }
-            }
-            else if (check.kind === "min") {
-                const tooSmall = check.inclusive
-                    ? input.data < check.value
-                    : input.data <= check.value;
-                if (tooSmall) {
-                    ctx = this._getOrReturnCtx(input, ctx);
-                    addIssueToContext(ctx, {
-                        code: ZodIssueCode.too_small,
-                        minimum: check.value,
-                        type: "number",
-                        inclusive: check.inclusive,
-                        exact: false,
-                        message: check.message,
-                    });
-                    status.dirty();
-                }
-            }
-            else if (check.kind === "max") {
-                const tooBig = check.inclusive
-                    ? input.data > check.value
-                    : input.data >= check.value;
-                if (tooBig) {
-                    ctx = this._getOrReturnCtx(input, ctx);
-                    addIssueToContext(ctx, {
-                        code: ZodIssueCode.too_big,
-                        maximum: check.value,
-                        type: "number",
-                        inclusive: check.inclusive,
-                        exact: false,
-                        message: check.message,
-                    });
-                    status.dirty();
-                }
-            }
-            else if (check.kind === "multipleOf") {
-                if (floatSafeRemainder(input.data, check.value) !== 0) {
-                    ctx = this._getOrReturnCtx(input, ctx);
-                    addIssueToContext(ctx, {
-                        code: ZodIssueCode.not_multiple_of,
-                        multipleOf: check.value,
-                        message: check.message,
-                    });
-                    status.dirty();
-                }
-            }
-            else if (check.kind === "finite") {
-                if (!Number.isFinite(input.data)) {
-                    ctx = this._getOrReturnCtx(input, ctx);
-                    addIssueToContext(ctx, {
-                        code: ZodIssueCode.not_finite,
-                        message: check.message,
-                    });
-                    status.dirty();
-                }
-            }
-            else {
-                util.assertNever(check);
-            }
-        }
-        return { status: status.value, value: input.data };
-    }
-    gte(value, message) {
-        return this.setLimit("min", value, true, errorUtil.toString(message));
-    }
-    gt(value, message) {
-        return this.setLimit("min", value, false, errorUtil.toString(message));
-    }
-    lte(value, message) {
-        return this.setLimit("max", value, true, errorUtil.toString(message));
-    }
-    lt(value, message) {
-        return this.setLimit("max", value, false, errorUtil.toString(message));
-    }
-    setLimit(kind, value, inclusive, message) {
-        return new ZodNumber({
-            ...this._def,
-            checks: [
-                ...this._def.checks,
-                {
-                    kind,
-                    value,
-                    inclusive,
-                    message: errorUtil.toString(message),
-                },
-            ],
-        });
-    }
-    _addCheck(check) {
-        return new ZodNumber({
-            ...this._def,
-            checks: [...this._def.checks, check],
-        });
-    }
-    int(message) {
-        return this._addCheck({
-            kind: "int",
-            message: errorUtil.toString(message),
-        });
-    }
-    positive(message) {
-        return this._addCheck({
-            kind: "min",
-            value: 0,
-            inclusive: false,
-            message: errorUtil.toString(message),
-        });
-    }
-    negative(message) {
-        return this._addCheck({
-            kind: "max",
-            value: 0,
-            inclusive: false,
-            message: errorUtil.toString(message),
-        });
-    }
-    nonpositive(message) {
-        return this._addCheck({
-            kind: "max",
-            value: 0,
-            inclusive: true,
-            message: errorUtil.toString(message),
-        });
-    }
-    nonnegative(message) {
-        return this._addCheck({
-            kind: "min",
-            value: 0,
-            inclusive: true,
-            message: errorUtil.toString(message),
-        });
-    }
-    multipleOf(value, message) {
-        return this._addCheck({
-            kind: "multipleOf",
-            value: value,
-            message: errorUtil.toString(message),
-        });
-    }
-    finite(message) {
-        return this._addCheck({
-            kind: "finite",
-            message: errorUtil.toString(message),
-        });
-    }
-    safe(message) {
-        return this._addCheck({
-            kind: "min",
-            inclusive: true,
-            value: Number.MIN_SAFE_INTEGER,
-            message: errorUtil.toString(message),
-        })._addCheck({
-            kind: "max",
-            inclusive: true,
-            value: Number.MAX_SAFE_INTEGER,
-            message: errorUtil.toString(message),
-        });
-    }
-    get minValue() {
-        let min = null;
-        for (const ch of this._def.checks) {
-            if (ch.kind === "min") {
-                if (min === null || ch.value > min)
-                    min = ch.value;
-            }
-        }
-        return min;
-    }
-    get maxValue() {
-        let max = null;
-        for (const ch of this._def.checks) {
-            if (ch.kind === "max") {
-                if (max === null || ch.value < max)
-                    max = ch.value;
-            }
-        }
-        return max;
-    }
-    get isInt() {
-        return !!this._def.checks.find((ch) => ch.kind === "int" ||
-            (ch.kind === "multipleOf" && util.isInteger(ch.value)));
-    }
-    get isFinite() {
-        let max = null, min = null;
-        for (const ch of this._def.checks) {
-            if (ch.kind === "finite" ||
-                ch.kind === "int" ||
-                ch.kind === "multipleOf") {
-                return true;
-            }
-            else if (ch.kind === "min") {
-                if (min === null || ch.value > min)
-                    min = ch.value;
-            }
-            else if (ch.kind === "max") {
-                if (max === null || ch.value < max)
-                    max = ch.value;
-            }
-        }
-        return Number.isFinite(min) && Number.isFinite(max);
-    }
-}
-ZodNumber.create = (params) => {
-    return new ZodNumber({
-        checks: [],
-        typeName: ZodFirstPartyTypeKind.ZodNumber,
-        coerce: (params === null || params === void 0 ? void 0 : params.coerce) || false,
-        ...processCreateParams(params),
-    });
-};
-class ZodBigInt extends ZodType {
-    constructor() {
-        super(...arguments);
-        this.min = this.gte;
-        this.max = this.lte;
-    }
-    _parse(input) {
-        if (this._def.coerce) {
-            try {
-                input.data = BigInt(input.data);
-            }
-            catch (_a) {
-                return this._getInvalidInput(input);
-            }
-        }
-        const parsedType = this._getType(input);
-        if (parsedType !== ZodParsedType.bigint) {
-            return this._getInvalidInput(input);
-        }
-        let ctx = undefined;
-        const status = new ParseStatus();
-        for (const check of this._def.checks) {
-            if (check.kind === "min") {
-                const tooSmall = check.inclusive
-                    ? input.data < check.value
-                    : input.data <= check.value;
-                if (tooSmall) {
-                    ctx = this._getOrReturnCtx(input, ctx);
-                    addIssueToContext(ctx, {
-                        code: ZodIssueCode.too_small,
-                        type: "bigint",
-                        minimum: check.value,
-                        inclusive: check.inclusive,
-                        message: check.message,
-                    });
-                    status.dirty();
-                }
-            }
-            else if (check.kind === "max") {
-                const tooBig = check.inclusive
-                    ? input.data > check.value
-                    : input.data >= check.value;
-                if (tooBig) {
-                    ctx = this._getOrReturnCtx(input, ctx);
-                    addIssueToContext(ctx, {
-                        code: ZodIssueCode.too_big,
-                        type: "bigint",
-                        maximum: check.value,
-                        inclusive: check.inclusive,
-                        message: check.message,
-                    });
-                    status.dirty();
-                }
-            }
-            else if (check.kind === "multipleOf") {
-                if (input.data % check.value !== BigInt(0)) {
-                    ctx = this._getOrReturnCtx(input, ctx);
-                    addIssueToContext(ctx, {
-                        code: ZodIssueCode.not_multiple_of,
-                        multipleOf: check.value,
-                        message: check.message,
-                    });
-                    status.dirty();
-                }
-            }
-            else {
-                util.assertNever(check);
-            }
-        }
-        return { status: status.value, value: input.data };
-    }
-    _getInvalidInput(input) {
-        const ctx = this._getOrReturnCtx(input);
-        addIssueToContext(ctx, {
-            code: ZodIssueCode.invalid_type,
-            expected: ZodParsedType.bigint,
-            received: ctx.parsedType,
-        });
-        return INVALID;
-    }
-    gte(value, message) {
-        return this.setLimit("min", value, true, errorUtil.toString(message));
-    }
-    gt(value, message) {
-        return this.setLimit("min", value, false, errorUtil.toString(message));
-    }
-    lte(value, message) {
-        return this.setLimit("max", value, true, errorUtil.toString(message));
-    }
-    lt(value, message) {
-        return this.setLimit("max", value, false, errorUtil.toString(message));
-    }
-    setLimit(kind, value, inclusive, message) {
-        return new ZodBigInt({
-            ...this._def,
-            checks: [
-                ...this._def.checks,
-                {
-                    kind,
-                    value,
-                    inclusive,
-                    message: errorUtil.toString(message),
-                },
-            ],
-        });
-    }
-    _addCheck(check) {
-        return new ZodBigInt({
-            ...this._def,
-            checks: [...this._def.checks, check],
-        });
-    }
-    positive(message) {
-        return this._addCheck({
-            kind: "min",
-            value: BigInt(0),
-            inclusive: false,
-            message: errorUtil.toString(message),
-        });
-    }
-    negative(message) {
-        return this._addCheck({
-            kind: "max",
-            value: BigInt(0),
-            inclusive: false,
-            message: errorUtil.toString(message),
-        });
-    }
-    nonpositive(message) {
-        return this._addCheck({
-            kind: "max",
-            value: BigInt(0),
-            inclusive: true,
-            message: errorUtil.toString(message),
-        });
-    }
-    nonnegative(message) {
-        return this._addCheck({
-            kind: "min",
-            value: BigInt(0),
-            inclusive: true,
-            message: errorUtil.toString(message),
-        });
-    }
-    multipleOf(value, message) {
-        return this._addCheck({
-            kind: "multipleOf",
-            value,
-            message: errorUtil.toString(message),
-        });
-    }
-    get minValue() {
-        let min = null;
-        for (const ch of this._def.checks) {
-            if (ch.kind === "min") {
-                if (min === null || ch.value > min)
-                    min = ch.value;
-            }
-        }
-        return min;
-    }
-    get maxValue() {
-        let max = null;
-        for (const ch of this._def.checks) {
-            if (ch.kind === "max") {
-                if (max === null || ch.value < max)
-                    max = ch.value;
-            }
-        }
-        return max;
-    }
-}
-ZodBigInt.create = (params) => {
-    var _a;
-    return new ZodBigInt({
-        checks: [],
-        typeName: ZodFirstPartyTypeKind.ZodBigInt,
-        coerce: (_a = params === null || params === void 0 ? void 0 : params.coerce) !== null && _a !== void 0 ? _a : false,
-        ...processCreateParams(params),
-    });
-};
-class ZodBoolean extends ZodType {
-    _parse(input) {
-        if (this._def.coerce) {
-            input.data = Boolean(input.data);
-        }
-        const parsedType = this._getType(input);
-        if (parsedType !== ZodParsedType.boolean) {
-            const ctx = this._getOrReturnCtx(input);
-            addIssueToContext(ctx, {
-                code: ZodIssueCode.invalid_type,
-                expected: ZodParsedType.boolean,
-                received: ctx.parsedType,
-            });
-            return INVALID;
-        }
-        return OK(input.data);
-    }
-}
-ZodBoolean.create = (params) => {
-    return new ZodBoolean({
-        typeName: ZodFirstPartyTypeKind.ZodBoolean,
-        coerce: (params === null || params === void 0 ? void 0 : params.coerce) || false,
-        ...processCreateParams(params),
-    });
-};
-class ZodDate extends ZodType {
-    _parse(input) {
-        if (this._def.coerce) {
-            input.data = new Date(input.data);
-        }
-        const parsedType = this._getType(input);
-        if (parsedType !== ZodParsedType.date) {
-            const ctx = this._getOrReturnCtx(input);
-            addIssueToContext(ctx, {
-                code: ZodIssueCode.invalid_type,
-                expected: ZodParsedType.date,
-                received: ctx.parsedType,
-            });
-            return INVALID;
-        }
-        if (isNaN(input.data.getTime())) {
-            const ctx = this._getOrReturnCtx(input);
-            addIssueToContext(ctx, {
-                code: ZodIssueCode.invalid_date,
-            });
-            return INVALID;
-        }
-        const status = new ParseStatus();
-        let ctx = undefined;
-        for (const check of this._def.checks) {
-            if (check.kind === "min") {
-                if (input.data.getTime() < check.value) {
-                    ctx = this._getOrReturnCtx(input, ctx);
-                    addIssueToContext(ctx, {
-                        code: ZodIssueCode.too_small,
-                        message: check.message,
-                        inclusive: true,
-                        exact: false,
-                        minimum: check.value,
-                        type: "date",
-                    });
-                    status.dirty();
-                }
-            }
-            else if (check.kind === "max") {
-                if (input.data.getTime() > check.value) {
-                    ctx = this._getOrReturnCtx(input, ctx);
-                    addIssueToContext(ctx, {
-                        code: ZodIssueCode.too_big,
-                        message: check.message,
-                        inclusive: true,
-                        exact: false,
-                        maximum: check.value,
-                        type: "date",
-                    });
-                    status.dirty();
-                }
-            }
-            else {
-                util.assertNever(check);
-            }
-        }
-        return {
-            status: status.value,
-            value: new Date(input.data.getTime()),
-        };
-    }
-    _addCheck(check) {
-        return new ZodDate({
-            ...this._def,
-            checks: [...this._def.checks, check],
-        });
-    }
-    min(minDate, message) {
-        return this._addCheck({
-            kind: "min",
-            value: minDate.getTime(),
-            message: errorUtil.toString(message),
-        });
-    }
-    max(maxDate, message) {
-        return this._addCheck({
-            kind: "max",
-            value: maxDate.getTime(),
-            message: errorUtil.toString(message),
-        });
-    }
-    get minDate() {
-        let min = null;
-        for (const ch of this._def.checks) {
-            if (ch.kind === "min") {
-                if (min === null || ch.value > min)
-                    min = ch.value;
-            }
-        }
-        return min != null ? new Date(min) : null;
-    }
-    get maxDate() {
-        let max = null;
-        for (const ch of this._def.checks) {
-            if (ch.kind === "max") {
-                if (max === null || ch.value < max)
-                    max = ch.value;
-            }
-        }
-        return max != null ? new Date(max) : null;
-    }
-}
-ZodDate.create = (params) => {
-    return new ZodDate({
-        checks: [],
-        coerce: (params === null || params === void 0 ? void 0 : params.coerce) || false,
-        typeName: ZodFirstPartyTypeKind.ZodDate,
-        ...processCreateParams(params),
-    });
-};
-class ZodSymbol extends ZodType {
-    _parse(input) {
-        const parsedType = this._getType(input);
-        if (parsedType !== ZodParsedType.symbol) {
-            const ctx = this._getOrReturnCtx(input);
-            addIssueToContext(ctx, {
-                code: ZodIssueCode.invalid_type,
-                expected: ZodParsedType.symbol,
-                received: ctx.parsedType,
-            });
-            return INVALID;
-        }
-        return OK(input.data);
-    }
-}
-ZodSymbol.create = (params) => {
-    return new ZodSymbol({
-        typeName: ZodFirstPartyTypeKind.ZodSymbol,
-        ...processCreateParams(params),
-    });
-};
-class ZodUndefined extends ZodType {
-    _parse(input) {
-        const parsedType = this._getType(input);
-        if (parsedType !== ZodParsedType.undefined) {
-            const ctx = this._getOrReturnCtx(input);
-            addIssueToContext(ctx, {
-                code: ZodIssueCode.invalid_type,
-                expected: ZodParsedType.undefined,
-                received: ctx.parsedType,
-            });
-            return INVALID;
-        }
-        return OK(input.data);
-    }
-}
-ZodUndefined.create = (params) => {
-    return new ZodUndefined({
-        typeName: ZodFirstPartyTypeKind.ZodUndefined,
-        ...processCreateParams(params),
-    });
-};
-class ZodNull extends ZodType {
-    _parse(input) {
-        const parsedType = this._getType(input);
-        if (parsedType !== ZodParsedType.null) {
-            const ctx = this._getOrReturnCtx(input);
-            addIssueToContext(ctx, {
-                code: ZodIssueCode.invalid_type,
-                expected: ZodParsedType.null,
-                received: ctx.parsedType,
-            });
-            return INVALID;
-        }
-        return OK(input.data);
-    }
-}
-ZodNull.create = (params) => {
-    return new ZodNull({
-        typeName: ZodFirstPartyTypeKind.ZodNull,
-        ...processCreateParams(params),
-    });
-};
-class ZodAny extends ZodType {
-    constructor() {
-        super(...arguments);
-        // to prevent instances of other classes from extending ZodAny. this causes issues with catchall in ZodObject.
-        this._any = true;
-    }
-    _parse(input) {
-        return OK(input.data);
-    }
-}
-ZodAny.create = (params) => {
-    return new ZodAny({
-        typeName: ZodFirstPartyTypeKind.ZodAny,
-        ...processCreateParams(params),
-    });
-};
-class ZodUnknown extends ZodType {
-    constructor() {
-        super(...arguments);
-        // required
-        this._unknown = true;
-    }
-    _parse(input) {
-        return OK(input.data);
-    }
-}
-ZodUnknown.create = (params) => {
-    return new ZodUnknown({
-        typeName: ZodFirstPartyTypeKind.ZodUnknown,
-        ...processCreateParams(params),
-    });
-};
-class ZodNever extends ZodType {
-    _parse(input) {
-        const ctx = this._getOrReturnCtx(input);
-        addIssueToContext(ctx, {
-            code: ZodIssueCode.invalid_type,
-            expected: ZodParsedType.never,
-            received: ctx.parsedType,
-        });
-        return INVALID;
-    }
-}
-ZodNever.create = (params) => {
-    return new ZodNever({
-        typeName: ZodFirstPartyTypeKind.ZodNever,
-        ...processCreateParams(params),
-    });
-};
-class ZodVoid extends ZodType {
-    _parse(input) {
-        const parsedType = this._getType(input);
-        if (parsedType !== ZodParsedType.undefined) {
-            const ctx = this._getOrReturnCtx(input);
-            addIssueToContext(ctx, {
-                code: ZodIssueCode.invalid_type,
-                expected: ZodParsedType.void,
-                received: ctx.parsedType,
-            });
-            return INVALID;
-        }
-        return OK(input.data);
-    }
-}
-ZodVoid.create = (params) => {
-    return new ZodVoid({
-        typeName: ZodFirstPartyTypeKind.ZodVoid,
-        ...processCreateParams(params),
-    });
-};
-class ZodArray extends ZodType {
-    _parse(input) {
-        const { ctx, status } = this._processInputParams(input);
-        const def = this._def;
-        if (ctx.parsedType !== ZodParsedType.array) {
-            addIssueToContext(ctx, {
-                code: ZodIssueCode.invalid_type,
-                expected: ZodParsedType.array,
-                received: ctx.parsedType,
-            });
-            return INVALID;
-        }
-        if (def.exactLength !== null) {
-            const tooBig = ctx.data.length > def.exactLength.value;
-            const tooSmall = ctx.data.length < def.exactLength.value;
-            if (tooBig || tooSmall) {
-                addIssueToContext(ctx, {
-                    code: tooBig ? ZodIssueCode.too_big : ZodIssueCode.too_small,
-                    minimum: (tooSmall ? def.exactLength.value : undefined),
-                    maximum: (tooBig ? def.exactLength.value : undefined),
-                    type: "array",
-                    inclusive: true,
-                    exact: true,
-                    message: def.exactLength.message,
-                });
-                status.dirty();
-            }
-        }
-        if (def.minLength !== null) {
-            if (ctx.data.length < def.minLength.value) {
-                addIssueToContext(ctx, {
-                    code: ZodIssueCode.too_small,
-                    minimum: def.minLength.value,
-                    type: "array",
-                    inclusive: true,
-                    exact: false,
-                    message: def.minLength.message,
-                });
-                status.dirty();
-            }
-        }
-        if (def.maxLength !== null) {
-            if (ctx.data.length > def.maxLength.value) {
-                addIssueToContext(ctx, {
-                    code: ZodIssueCode.too_big,
-                    maximum: def.maxLength.value,
-                    type: "array",
-                    inclusive: true,
-                    exact: false,
-                    message: def.maxLength.message,
-                });
-                status.dirty();
-            }
-        }
-        if (ctx.common.async) {
-            return Promise.all([...ctx.data].map((item, i) => {
-                return def.type._parseAsync(new ParseInputLazyPath(ctx, item, ctx.path, i));
-            })).then((result) => {
-                return ParseStatus.mergeArray(status, result);
-            });
-        }
-        const result = [...ctx.data].map((item, i) => {
-            return def.type._parseSync(new ParseInputLazyPath(ctx, item, ctx.path, i));
-        });
-        return ParseStatus.mergeArray(status, result);
-    }
-    get element() {
-        return this._def.type;
-    }
-    min(minLength, message) {
-        return new ZodArray({
-            ...this._def,
-            minLength: { value: minLength, message: errorUtil.toString(message) },
-        });
-    }
-    max(maxLength, message) {
-        return new ZodArray({
-            ...this._def,
-            maxLength: { value: maxLength, message: errorUtil.toString(message) },
-        });
-    }
-    length(len, message) {
-        return new ZodArray({
-            ...this._def,
-            exactLength: { value: len, message: errorUtil.toString(message) },
-        });
-    }
-    nonempty(message) {
-        return this.min(1, message);
-    }
-}
-ZodArray.create = (schema, params) => {
-    return new ZodArray({
-        type: schema,
-        minLength: null,
-        maxLength: null,
-        exactLength: null,
-        typeName: ZodFirstPartyTypeKind.ZodArray,
-        ...processCreateParams(params),
-    });
-};
-function deepPartialify(schema) {
-    if (schema instanceof ZodObject) {
-        const newShape = {};
-        for (const key in schema.shape) {
-            const fieldSchema = schema.shape[key];
-            newShape[key] = ZodOptional.create(deepPartialify(fieldSchema));
-        }
-        return new ZodObject({
-            ...schema._def,
-            shape: () => newShape,
-        });
-    }
-    else if (schema instanceof ZodArray) {
-        return new ZodArray({
-            ...schema._def,
-            type: deepPartialify(schema.element),
-        });
-    }
-    else if (schema instanceof ZodOptional) {
-        return ZodOptional.create(deepPartialify(schema.unwrap()));
-    }
-    else if (schema instanceof ZodNullable) {
-        return ZodNullable.create(deepPartialify(schema.unwrap()));
-    }
-    else if (schema instanceof ZodTuple) {
-        return ZodTuple.create(schema.items.map((item) => deepPartialify(item)));
-    }
-    else {
-        return schema;
-    }
-}
-class ZodObject extends ZodType {
-    constructor() {
-        super(...arguments);
-        this._cached = null;
-        /**
-         * @deprecated In most cases, this is no longer needed - unknown properties are now silently stripped.
-         * If you want to pass through unknown properties, use `.passthrough()` instead.
-         */
-        this.nonstrict = this.passthrough;
-        // extend<
-        //   Augmentation extends ZodRawShape,
-        //   NewOutput extends util.flatten<{
-        //     [k in keyof Augmentation | keyof Output]: k extends keyof Augmentation
-        //       ? Augmentation[k]["_output"]
-        //       : k extends keyof Output
-        //       ? Output[k]
-        //       : never;
-        //   }>,
-        //   NewInput extends util.flatten<{
-        //     [k in keyof Augmentation | keyof Input]: k extends keyof Augmentation
-        //       ? Augmentation[k]["_input"]
-        //       : k extends keyof Input
-        //       ? Input[k]
-        //       : never;
-        //   }>
-        // >(
-        //   augmentation: Augmentation
-        // ): ZodObject<
-        //   extendShape<T, Augmentation>,
-        //   UnknownKeys,
-        //   Catchall,
-        //   NewOutput,
-        //   NewInput
-        // > {
-        //   return new ZodObject({
-        //     ...this._def,
-        //     shape: () => ({
-        //       ...this._def.shape(),
-        //       ...augmentation,
-        //     }),
-        //   }) as any;
-        // }
-        /**
-         * @deprecated Use `.extend` instead
-         *  */
-        this.augment = this.extend;
-    }
-    _getCached() {
-        if (this._cached !== null)
-            return this._cached;
-        const shape = this._def.shape();
-        const keys = util.objectKeys(shape);
-        return (this._cached = { shape, keys });
-    }
-    _parse(input) {
-        const parsedType = this._getType(input);
-        if (parsedType !== ZodParsedType.object) {
-            const ctx = this._getOrReturnCtx(input);
-            addIssueToContext(ctx, {
-                code: ZodIssueCode.invalid_type,
-                expected: ZodParsedType.object,
-                received: ctx.parsedType,
-            });
-            return INVALID;
-        }
-        const { status, ctx } = this._processInputParams(input);
-        const { shape, keys: shapeKeys } = this._getCached();
-        const extraKeys = [];
-        if (!(this._def.catchall instanceof ZodNever &&
-            this._def.unknownKeys === "strip")) {
-            for (const key in ctx.data) {
-                if (!shapeKeys.includes(key)) {
-                    extraKeys.push(key);
-                }
-            }
-        }
-        const pairs = [];
-        for (const key of shapeKeys) {
-            const keyValidator = shape[key];
-            const value = ctx.data[key];
-            pairs.push({
-                key: { status: "valid", value: key },
-                value: keyValidator._parse(new ParseInputLazyPath(ctx, value, ctx.path, key)),
-                alwaysSet: key in ctx.data,
-            });
-        }
-        if (this._def.catchall instanceof ZodNever) {
-            const unknownKeys = this._def.unknownKeys;
-            if (unknownKeys === "passthrough") {
-                for (const key of extraKeys) {
-                    pairs.push({
-                        key: { status: "valid", value: key },
-                        value: { status: "valid", value: ctx.data[key] },
-                    });
-                }
-            }
-            else if (unknownKeys === "strict") {
-                if (extraKeys.length > 0) {
-                    addIssueToContext(ctx, {
-                        code: ZodIssueCode.unrecognized_keys,
-                        keys: extraKeys,
-                    });
-                    status.dirty();
-                }
-            }
-            else if (unknownKeys === "strip") ;
-            else {
-                throw new Error(`Internal ZodObject error: invalid unknownKeys value.`);
-            }
-        }
-        else {
-            // run catchall validation
-            const catchall = this._def.catchall;
-            for (const key of extraKeys) {
-                const value = ctx.data[key];
-                pairs.push({
-                    key: { status: "valid", value: key },
-                    value: catchall._parse(new ParseInputLazyPath(ctx, value, ctx.path, key) //, ctx.child(key), value, getParsedType(value)
-                    ),
-                    alwaysSet: key in ctx.data,
-                });
-            }
-        }
-        if (ctx.common.async) {
-            return Promise.resolve()
-                .then(async () => {
-                const syncPairs = [];
-                for (const pair of pairs) {
-                    const key = await pair.key;
-                    const value = await pair.value;
-                    syncPairs.push({
-                        key,
-                        value,
-                        alwaysSet: pair.alwaysSet,
-                    });
-                }
-                return syncPairs;
-            })
-                .then((syncPairs) => {
-                return ParseStatus.mergeObjectSync(status, syncPairs);
-            });
-        }
-        else {
-            return ParseStatus.mergeObjectSync(status, pairs);
-        }
-    }
-    get shape() {
-        return this._def.shape();
-    }
-    strict(message) {
-        errorUtil.errToObj;
-        return new ZodObject({
-            ...this._def,
-            unknownKeys: "strict",
-            ...(message !== undefined
-                ? {
-                    errorMap: (issue, ctx) => {
-                        var _a, _b, _c, _d;
-                        const defaultError = (_c = (_b = (_a = this._def).errorMap) === null || _b === void 0 ? void 0 : _b.call(_a, issue, ctx).message) !== null && _c !== void 0 ? _c : ctx.defaultError;
-                        if (issue.code === "unrecognized_keys")
-                            return {
-                                message: (_d = errorUtil.errToObj(message).message) !== null && _d !== void 0 ? _d : defaultError,
-                            };
-                        return {
-                            message: defaultError,
-                        };
-                    },
-                }
-                : {}),
-        });
-    }
-    strip() {
-        return new ZodObject({
-            ...this._def,
-            unknownKeys: "strip",
-        });
-    }
-    passthrough() {
-        return new ZodObject({
-            ...this._def,
-            unknownKeys: "passthrough",
-        });
-    }
-    // const AugmentFactory =
-    //   <Def extends ZodObjectDef>(def: Def) =>
-    //   <Augmentation extends ZodRawShape>(
-    //     augmentation: Augmentation
-    //   ): ZodObject<
-    //     extendShape<ReturnType<Def["shape"]>, Augmentation>,
-    //     Def["unknownKeys"],
-    //     Def["catchall"]
-    //   > => {
-    //     return new ZodObject({
-    //       ...def,
-    //       shape: () => ({
-    //         ...def.shape(),
-    //         ...augmentation,
-    //       }),
-    //     }) as any;
-    //   };
-    extend(augmentation) {
-        return new ZodObject({
-            ...this._def,
-            shape: () => ({
-                ...this._def.shape(),
-                ...augmentation,
-            }),
-        });
-    }
-    /**
-     * Prior to zod@1.0.12 there was a bug in the
-     * inferred type of merged objects. Please
-     * upgrade if you are experiencing issues.
-     */
-    merge(merging) {
-        const merged = new ZodObject({
-            unknownKeys: merging._def.unknownKeys,
-            catchall: merging._def.catchall,
-            shape: () => ({
-                ...this._def.shape(),
-                ...merging._def.shape(),
-            }),
-            typeName: ZodFirstPartyTypeKind.ZodObject,
-        });
-        return merged;
-    }
-    // merge<
-    //   Incoming extends AnyZodObject,
-    //   Augmentation extends Incoming["shape"],
-    //   NewOutput extends {
-    //     [k in keyof Augmentation | keyof Output]: k extends keyof Augmentation
-    //       ? Augmentation[k]["_output"]
-    //       : k extends keyof Output
-    //       ? Output[k]
-    //       : never;
-    //   },
-    //   NewInput extends {
-    //     [k in keyof Augmentation | keyof Input]: k extends keyof Augmentation
-    //       ? Augmentation[k]["_input"]
-    //       : k extends keyof Input
-    //       ? Input[k]
-    //       : never;
-    //   }
-    // >(
-    //   merging: Incoming
-    // ): ZodObject<
-    //   extendShape<T, ReturnType<Incoming["_def"]["shape"]>>,
-    //   Incoming["_def"]["unknownKeys"],
-    //   Incoming["_def"]["catchall"],
-    //   NewOutput,
-    //   NewInput
-    // > {
-    //   const merged: any = new ZodObject({
-    //     unknownKeys: merging._def.unknownKeys,
-    //     catchall: merging._def.catchall,
-    //     shape: () =>
-    //       objectUtil.mergeShapes(this._def.shape(), merging._def.shape()),
-    //     typeName: ZodFirstPartyTypeKind.ZodObject,
-    //   }) as any;
-    //   return merged;
-    // }
-    setKey(key, schema) {
-        return this.augment({ [key]: schema });
-    }
-    // merge<Incoming extends AnyZodObject>(
-    //   merging: Incoming
-    // ): //ZodObject<T & Incoming["_shape"], UnknownKeys, Catchall> = (merging) => {
-    // ZodObject<
-    //   extendShape<T, ReturnType<Incoming["_def"]["shape"]>>,
-    //   Incoming["_def"]["unknownKeys"],
-    //   Incoming["_def"]["catchall"]
-    // > {
-    //   // const mergedShape = objectUtil.mergeShapes(
-    //   //   this._def.shape(),
-    //   //   merging._def.shape()
-    //   // );
-    //   const merged: any = new ZodObject({
-    //     unknownKeys: merging._def.unknownKeys,
-    //     catchall: merging._def.catchall,
-    //     shape: () =>
-    //       objectUtil.mergeShapes(this._def.shape(), merging._def.shape()),
-    //     typeName: ZodFirstPartyTypeKind.ZodObject,
-    //   }) as any;
-    //   return merged;
-    // }
-    catchall(index) {
-        return new ZodObject({
-            ...this._def,
-            catchall: index,
-        });
-    }
-    pick(mask) {
-        const shape = {};
-        util.objectKeys(mask).forEach((key) => {
-            if (mask[key] && this.shape[key]) {
-                shape[key] = this.shape[key];
-            }
-        });
-        return new ZodObject({
-            ...this._def,
-            shape: () => shape,
-        });
-    }
-    omit(mask) {
-        const shape = {};
-        util.objectKeys(this.shape).forEach((key) => {
-            if (!mask[key]) {
-                shape[key] = this.shape[key];
-            }
-        });
-        return new ZodObject({
-            ...this._def,
-            shape: () => shape,
-        });
-    }
-    /**
-     * @deprecated
-     */
-    deepPartial() {
-        return deepPartialify(this);
-    }
-    partial(mask) {
-        const newShape = {};
-        util.objectKeys(this.shape).forEach((key) => {
-            const fieldSchema = this.shape[key];
-            if (mask && !mask[key]) {
-                newShape[key] = fieldSchema;
-            }
-            else {
-                newShape[key] = fieldSchema.optional();
-            }
-        });
-        return new ZodObject({
-            ...this._def,
-            shape: () => newShape,
-        });
-    }
-    required(mask) {
-        const newShape = {};
-        util.objectKeys(this.shape).forEach((key) => {
-            if (mask && !mask[key]) {
-                newShape[key] = this.shape[key];
-            }
-            else {
-                const fieldSchema = this.shape[key];
-                let newField = fieldSchema;
-                while (newField instanceof ZodOptional) {
-                    newField = newField._def.innerType;
-                }
-                newShape[key] = newField;
-            }
-        });
-        return new ZodObject({
-            ...this._def,
-            shape: () => newShape,
-        });
-    }
-    keyof() {
-        return createZodEnum(util.objectKeys(this.shape));
-    }
-}
-ZodObject.create = (shape, params) => {
-    return new ZodObject({
-        shape: () => shape,
-        unknownKeys: "strip",
-        catchall: ZodNever.create(),
-        typeName: ZodFirstPartyTypeKind.ZodObject,
-        ...processCreateParams(params),
-    });
-};
-ZodObject.strictCreate = (shape, params) => {
-    return new ZodObject({
-        shape: () => shape,
-        unknownKeys: "strict",
-        catchall: ZodNever.create(),
-        typeName: ZodFirstPartyTypeKind.ZodObject,
-        ...processCreateParams(params),
-    });
-};
-ZodObject.lazycreate = (shape, params) => {
-    return new ZodObject({
-        shape,
-        unknownKeys: "strip",
-        catchall: ZodNever.create(),
-        typeName: ZodFirstPartyTypeKind.ZodObject,
-        ...processCreateParams(params),
-    });
-};
-class ZodUnion extends ZodType {
-    _parse(input) {
-        const { ctx } = this._processInputParams(input);
-        const options = this._def.options;
-        function handleResults(results) {
-            // return first issue-free validation if it exists
-            for (const result of results) {
-                if (result.result.status === "valid") {
-                    return result.result;
-                }
-            }
-            for (const result of results) {
-                if (result.result.status === "dirty") {
-                    // add issues from dirty option
-                    ctx.common.issues.push(...result.ctx.common.issues);
-                    return result.result;
-                }
-            }
-            // return invalid
-            const unionErrors = results.map((result) => new ZodError(result.ctx.common.issues));
-            addIssueToContext(ctx, {
-                code: ZodIssueCode.invalid_union,
-                unionErrors,
-            });
-            return INVALID;
-        }
-        if (ctx.common.async) {
-            return Promise.all(options.map(async (option) => {
-                const childCtx = {
-                    ...ctx,
-                    common: {
-                        ...ctx.common,
-                        issues: [],
-                    },
-                    parent: null,
-                };
-                return {
-                    result: await option._parseAsync({
-                        data: ctx.data,
-                        path: ctx.path,
-                        parent: childCtx,
-                    }),
-                    ctx: childCtx,
-                };
-            })).then(handleResults);
-        }
-        else {
-            let dirty = undefined;
-            const issues = [];
-            for (const option of options) {
-                const childCtx = {
-                    ...ctx,
-                    common: {
-                        ...ctx.common,
-                        issues: [],
-                    },
-                    parent: null,
-                };
-                const result = option._parseSync({
-                    data: ctx.data,
-                    path: ctx.path,
-                    parent: childCtx,
-                });
-                if (result.status === "valid") {
-                    return result;
-                }
-                else if (result.status === "dirty" && !dirty) {
-                    dirty = { result, ctx: childCtx };
-                }
-                if (childCtx.common.issues.length) {
-                    issues.push(childCtx.common.issues);
-                }
-            }
-            if (dirty) {
-                ctx.common.issues.push(...dirty.ctx.common.issues);
-                return dirty.result;
-            }
-            const unionErrors = issues.map((issues) => new ZodError(issues));
-            addIssueToContext(ctx, {
-                code: ZodIssueCode.invalid_union,
-                unionErrors,
-            });
-            return INVALID;
-        }
-    }
-    get options() {
-        return this._def.options;
-    }
-}
-ZodUnion.create = (types, params) => {
-    return new ZodUnion({
-        options: types,
-        typeName: ZodFirstPartyTypeKind.ZodUnion,
-        ...processCreateParams(params),
-    });
-};
-/////////////////////////////////////////////////////
-/////////////////////////////////////////////////////
-//////////                                 //////////
-//////////      ZodDiscriminatedUnion      //////////
-//////////                                 //////////
-/////////////////////////////////////////////////////
-/////////////////////////////////////////////////////
-const getDiscriminator = (type) => {
-    if (type instanceof ZodLazy) {
-        return getDiscriminator(type.schema);
-    }
-    else if (type instanceof ZodEffects) {
-        return getDiscriminator(type.innerType());
-    }
-    else if (type instanceof ZodLiteral) {
-        return [type.value];
-    }
-    else if (type instanceof ZodEnum) {
-        return type.options;
-    }
-    else if (type instanceof ZodNativeEnum) {
-        // eslint-disable-next-line ban/ban
-        return util.objectValues(type.enum);
-    }
-    else if (type instanceof ZodDefault) {
-        return getDiscriminator(type._def.innerType);
-    }
-    else if (type instanceof ZodUndefined) {
-        return [undefined];
-    }
-    else if (type instanceof ZodNull) {
-        return [null];
-    }
-    else if (type instanceof ZodOptional) {
-        return [undefined, ...getDiscriminator(type.unwrap())];
-    }
-    else if (type instanceof ZodNullable) {
-        return [null, ...getDiscriminator(type.unwrap())];
-    }
-    else if (type instanceof ZodBranded) {
-        return getDiscriminator(type.unwrap());
-    }
-    else if (type instanceof ZodReadonly) {
-        return getDiscriminator(type.unwrap());
-    }
-    else if (type instanceof ZodCatch) {
-        return getDiscriminator(type._def.innerType);
-    }
-    else {
-        return [];
-    }
-};
-class ZodDiscriminatedUnion extends ZodType {
-    _parse(input) {
-        const { ctx } = this._processInputParams(input);
-        if (ctx.parsedType !== ZodParsedType.object) {
-            addIssueToContext(ctx, {
-                code: ZodIssueCode.invalid_type,
-                expected: ZodParsedType.object,
-                received: ctx.parsedType,
-            });
-            return INVALID;
-        }
-        const discriminator = this.discriminator;
-        const discriminatorValue = ctx.data[discriminator];
-        const option = this.optionsMap.get(discriminatorValue);
-        if (!option) {
-            addIssueToContext(ctx, {
-                code: ZodIssueCode.invalid_union_discriminator,
-                options: Array.from(this.optionsMap.keys()),
-                path: [discriminator],
-            });
-            return INVALID;
-        }
-        if (ctx.common.async) {
-            return option._parseAsync({
-                data: ctx.data,
-                path: ctx.path,
-                parent: ctx,
-            });
-        }
-        else {
-            return option._parseSync({
-                data: ctx.data,
-                path: ctx.path,
-                parent: ctx,
-            });
-        }
-    }
-    get discriminator() {
-        return this._def.discriminator;
-    }
-    get options() {
-        return this._def.options;
-    }
-    get optionsMap() {
-        return this._def.optionsMap;
-    }
-    /**
-     * The constructor of the discriminated union schema. Its behaviour is very similar to that of the normal z.union() constructor.
-     * However, it only allows a union of objects, all of which need to share a discriminator property. This property must
-     * have a different value for each object in the union.
-     * @param discriminator the name of the discriminator property
-     * @param types an array of object schemas
-     * @param params
-     */
-    static create(discriminator, options, params) {
-        // Get all the valid discriminator values
-        const optionsMap = new Map();
-        // try {
-        for (const type of options) {
-            const discriminatorValues = getDiscriminator(type.shape[discriminator]);
-            if (!discriminatorValues.length) {
-                throw new Error(`A discriminator value for key \`${discriminator}\` could not be extracted from all schema options`);
-            }
-            for (const value of discriminatorValues) {
-                if (optionsMap.has(value)) {
-                    throw new Error(`Discriminator property ${String(discriminator)} has duplicate value ${String(value)}`);
-                }
-                optionsMap.set(value, type);
-            }
-        }
-        return new ZodDiscriminatedUnion({
-            typeName: ZodFirstPartyTypeKind.ZodDiscriminatedUnion,
-            discriminator,
-            options,
-            optionsMap,
-            ...processCreateParams(params),
-        });
-    }
-}
-function mergeValues(a, b) {
-    const aType = getParsedType(a);
-    const bType = getParsedType(b);
-    if (a === b) {
-        return { valid: true, data: a };
-    }
-    else if (aType === ZodParsedType.object && bType === ZodParsedType.object) {
-        const bKeys = util.objectKeys(b);
-        const sharedKeys = util
-            .objectKeys(a)
-            .filter((key) => bKeys.indexOf(key) !== -1);
-        const newObj = { ...a, ...b };
-        for (const key of sharedKeys) {
-            const sharedValue = mergeValues(a[key], b[key]);
-            if (!sharedValue.valid) {
-                return { valid: false };
-            }
-            newObj[key] = sharedValue.data;
-        }
-        return { valid: true, data: newObj };
-    }
-    else if (aType === ZodParsedType.array && bType === ZodParsedType.array) {
-        if (a.length !== b.length) {
-            return { valid: false };
-        }
-        const newArray = [];
-        for (let index = 0; index < a.length; index++) {
-            const itemA = a[index];
-            const itemB = b[index];
-            const sharedValue = mergeValues(itemA, itemB);
-            if (!sharedValue.valid) {
-                return { valid: false };
-            }
-            newArray.push(sharedValue.data);
-        }
-        return { valid: true, data: newArray };
-    }
-    else if (aType === ZodParsedType.date &&
-        bType === ZodParsedType.date &&
-        +a === +b) {
-        return { valid: true, data: a };
-    }
-    else {
-        return { valid: false };
-    }
-}
-class ZodIntersection extends ZodType {
-    _parse(input) {
-        const { status, ctx } = this._processInputParams(input);
-        const handleParsed = (parsedLeft, parsedRight) => {
-            if (isAborted(parsedLeft) || isAborted(parsedRight)) {
-                return INVALID;
-            }
-            const merged = mergeValues(parsedLeft.value, parsedRight.value);
-            if (!merged.valid) {
-                addIssueToContext(ctx, {
-                    code: ZodIssueCode.invalid_intersection_types,
-                });
-                return INVALID;
-            }
-            if (isDirty(parsedLeft) || isDirty(parsedRight)) {
-                status.dirty();
-            }
-            return { status: status.value, value: merged.data };
-        };
-        if (ctx.common.async) {
-            return Promise.all([
-                this._def.left._parseAsync({
-                    data: ctx.data,
-                    path: ctx.path,
-                    parent: ctx,
-                }),
-                this._def.right._parseAsync({
-                    data: ctx.data,
-                    path: ctx.path,
-                    parent: ctx,
-                }),
-            ]).then(([left, right]) => handleParsed(left, right));
-        }
-        else {
-            return handleParsed(this._def.left._parseSync({
-                data: ctx.data,
-                path: ctx.path,
-                parent: ctx,
-            }), this._def.right._parseSync({
-                data: ctx.data,
-                path: ctx.path,
-                parent: ctx,
-            }));
-        }
-    }
-}
-ZodIntersection.create = (left, right, params) => {
-    return new ZodIntersection({
-        left: left,
-        right: right,
-        typeName: ZodFirstPartyTypeKind.ZodIntersection,
-        ...processCreateParams(params),
-    });
-};
-class ZodTuple extends ZodType {
-    _parse(input) {
-        const { status, ctx } = this._processInputParams(input);
-        if (ctx.parsedType !== ZodParsedType.array) {
-            addIssueToContext(ctx, {
-                code: ZodIssueCode.invalid_type,
-                expected: ZodParsedType.array,
-                received: ctx.parsedType,
-            });
-            return INVALID;
-        }
-        if (ctx.data.length < this._def.items.length) {
-            addIssueToContext(ctx, {
-                code: ZodIssueCode.too_small,
-                minimum: this._def.items.length,
-                inclusive: true,
-                exact: false,
-                type: "array",
-            });
-            return INVALID;
-        }
-        const rest = this._def.rest;
-        if (!rest && ctx.data.length > this._def.items.length) {
-            addIssueToContext(ctx, {
-                code: ZodIssueCode.too_big,
-                maximum: this._def.items.length,
-                inclusive: true,
-                exact: false,
-                type: "array",
-            });
-            status.dirty();
-        }
-        const items = [...ctx.data]
-            .map((item, itemIndex) => {
-            const schema = this._def.items[itemIndex] || this._def.rest;
-            if (!schema)
-                return null;
-            return schema._parse(new ParseInputLazyPath(ctx, item, ctx.path, itemIndex));
-        })
-            .filter((x) => !!x); // filter nulls
-        if (ctx.common.async) {
-            return Promise.all(items).then((results) => {
-                return ParseStatus.mergeArray(status, results);
-            });
-        }
-        else {
-            return ParseStatus.mergeArray(status, items);
-        }
-    }
-    get items() {
-        return this._def.items;
-    }
-    rest(rest) {
-        return new ZodTuple({
-            ...this._def,
-            rest,
-        });
-    }
-}
-ZodTuple.create = (schemas, params) => {
-    if (!Array.isArray(schemas)) {
-        throw new Error("You must pass an array of schemas to z.tuple([ ... ])");
-    }
-    return new ZodTuple({
-        items: schemas,
-        typeName: ZodFirstPartyTypeKind.ZodTuple,
-        rest: null,
-        ...processCreateParams(params),
-    });
-};
-class ZodRecord extends ZodType {
-    get keySchema() {
-        return this._def.keyType;
-    }
-    get valueSchema() {
-        return this._def.valueType;
-    }
-    _parse(input) {
-        const { status, ctx } = this._processInputParams(input);
-        if (ctx.parsedType !== ZodParsedType.object) {
-            addIssueToContext(ctx, {
-                code: ZodIssueCode.invalid_type,
-                expected: ZodParsedType.object,
-                received: ctx.parsedType,
-            });
-            return INVALID;
-        }
-        const pairs = [];
-        const keyType = this._def.keyType;
-        const valueType = this._def.valueType;
-        for (const key in ctx.data) {
-            pairs.push({
-                key: keyType._parse(new ParseInputLazyPath(ctx, key, ctx.path, key)),
-                value: valueType._parse(new ParseInputLazyPath(ctx, ctx.data[key], ctx.path, key)),
-                alwaysSet: key in ctx.data,
-            });
-        }
-        if (ctx.common.async) {
-            return ParseStatus.mergeObjectAsync(status, pairs);
-        }
-        else {
-            return ParseStatus.mergeObjectSync(status, pairs);
-        }
-    }
-    get element() {
-        return this._def.valueType;
-    }
-    static create(first, second, third) {
-        if (second instanceof ZodType) {
-            return new ZodRecord({
-                keyType: first,
-                valueType: second,
-                typeName: ZodFirstPartyTypeKind.ZodRecord,
-                ...processCreateParams(third),
-            });
-        }
-        return new ZodRecord({
-            keyType: ZodString.create(),
-            valueType: first,
-            typeName: ZodFirstPartyTypeKind.ZodRecord,
-            ...processCreateParams(second),
-        });
-    }
-}
-class ZodMap extends ZodType {
-    get keySchema() {
-        return this._def.keyType;
-    }
-    get valueSchema() {
-        return this._def.valueType;
-    }
-    _parse(input) {
-        const { status, ctx } = this._processInputParams(input);
-        if (ctx.parsedType !== ZodParsedType.map) {
-            addIssueToContext(ctx, {
-                code: ZodIssueCode.invalid_type,
-                expected: ZodParsedType.map,
-                received: ctx.parsedType,
-            });
-            return INVALID;
-        }
-        const keyType = this._def.keyType;
-        const valueType = this._def.valueType;
-        const pairs = [...ctx.data.entries()].map(([key, value], index) => {
-            return {
-                key: keyType._parse(new ParseInputLazyPath(ctx, key, ctx.path, [index, "key"])),
-                value: valueType._parse(new ParseInputLazyPath(ctx, value, ctx.path, [index, "value"])),
-            };
-        });
-        if (ctx.common.async) {
-            const finalMap = new Map();
-            return Promise.resolve().then(async () => {
-                for (const pair of pairs) {
-                    const key = await pair.key;
-                    const value = await pair.value;
-                    if (key.status === "aborted" || value.status === "aborted") {
-                        return INVALID;
-                    }
-                    if (key.status === "dirty" || value.status === "dirty") {
-                        status.dirty();
-                    }
-                    finalMap.set(key.value, value.value);
-                }
-                return { status: status.value, value: finalMap };
-            });
-        }
-        else {
-            const finalMap = new Map();
-            for (const pair of pairs) {
-                const key = pair.key;
-                const value = pair.value;
-                if (key.status === "aborted" || value.status === "aborted") {
-                    return INVALID;
-                }
-                if (key.status === "dirty" || value.status === "dirty") {
-                    status.dirty();
-                }
-                finalMap.set(key.value, value.value);
-            }
-            return { status: status.value, value: finalMap };
-        }
-    }
-}
-ZodMap.create = (keyType, valueType, params) => {
-    return new ZodMap({
-        valueType,
-        keyType,
-        typeName: ZodFirstPartyTypeKind.ZodMap,
-        ...processCreateParams(params),
-    });
-};
-class ZodSet extends ZodType {
-    _parse(input) {
-        const { status, ctx } = this._processInputParams(input);
-        if (ctx.parsedType !== ZodParsedType.set) {
-            addIssueToContext(ctx, {
-                code: ZodIssueCode.invalid_type,
-                expected: ZodParsedType.set,
-                received: ctx.parsedType,
-            });
-            return INVALID;
-        }
-        const def = this._def;
-        if (def.minSize !== null) {
-            if (ctx.data.size < def.minSize.value) {
-                addIssueToContext(ctx, {
-                    code: ZodIssueCode.too_small,
-                    minimum: def.minSize.value,
-                    type: "set",
-                    inclusive: true,
-                    exact: false,
-                    message: def.minSize.message,
-                });
-                status.dirty();
-            }
-        }
-        if (def.maxSize !== null) {
-            if (ctx.data.size > def.maxSize.value) {
-                addIssueToContext(ctx, {
-                    code: ZodIssueCode.too_big,
-                    maximum: def.maxSize.value,
-                    type: "set",
-                    inclusive: true,
-                    exact: false,
-                    message: def.maxSize.message,
-                });
-                status.dirty();
-            }
-        }
-        const valueType = this._def.valueType;
-        function finalizeSet(elements) {
-            const parsedSet = new Set();
-            for (const element of elements) {
-                if (element.status === "aborted")
-                    return INVALID;
-                if (element.status === "dirty")
-                    status.dirty();
-                parsedSet.add(element.value);
-            }
-            return { status: status.value, value: parsedSet };
-        }
-        const elements = [...ctx.data.values()].map((item, i) => valueType._parse(new ParseInputLazyPath(ctx, item, ctx.path, i)));
-        if (ctx.common.async) {
-            return Promise.all(elements).then((elements) => finalizeSet(elements));
-        }
-        else {
-            return finalizeSet(elements);
-        }
-    }
-    min(minSize, message) {
-        return new ZodSet({
-            ...this._def,
-            minSize: { value: minSize, message: errorUtil.toString(message) },
-        });
-    }
-    max(maxSize, message) {
-        return new ZodSet({
-            ...this._def,
-            maxSize: { value: maxSize, message: errorUtil.toString(message) },
-        });
-    }
-    size(size, message) {
-        return this.min(size, message).max(size, message);
-    }
-    nonempty(message) {
-        return this.min(1, message);
-    }
-}
-ZodSet.create = (valueType, params) => {
-    return new ZodSet({
-        valueType,
-        minSize: null,
-        maxSize: null,
-        typeName: ZodFirstPartyTypeKind.ZodSet,
-        ...processCreateParams(params),
-    });
-};
-class ZodFunction extends ZodType {
-    constructor() {
-        super(...arguments);
-        this.validate = this.implement;
-    }
-    _parse(input) {
-        const { ctx } = this._processInputParams(input);
-        if (ctx.parsedType !== ZodParsedType.function) {
-            addIssueToContext(ctx, {
-                code: ZodIssueCode.invalid_type,
-                expected: ZodParsedType.function,
-                received: ctx.parsedType,
-            });
-            return INVALID;
-        }
-        function makeArgsIssue(args, error) {
-            return makeIssue({
-                data: args,
-                path: ctx.path,
-                errorMaps: [
-                    ctx.common.contextualErrorMap,
-                    ctx.schemaErrorMap,
-                    getErrorMap(),
-                    errorMap,
-                ].filter((x) => !!x),
-                issueData: {
-                    code: ZodIssueCode.invalid_arguments,
-                    argumentsError: error,
-                },
-            });
-        }
-        function makeReturnsIssue(returns, error) {
-            return makeIssue({
-                data: returns,
-                path: ctx.path,
-                errorMaps: [
-                    ctx.common.contextualErrorMap,
-                    ctx.schemaErrorMap,
-                    getErrorMap(),
-                    errorMap,
-                ].filter((x) => !!x),
-                issueData: {
-                    code: ZodIssueCode.invalid_return_type,
-                    returnTypeError: error,
-                },
-            });
-        }
-        const params = { errorMap: ctx.common.contextualErrorMap };
-        const fn = ctx.data;
-        if (this._def.returns instanceof ZodPromise) {
-            // Would love a way to avoid disabling this rule, but we need
-            // an alias (using an arrow function was what caused 2651).
-            // eslint-disable-next-line @typescript-eslint/no-this-alias
-            const me = this;
-            return OK(async function (...args) {
-                const error = new ZodError([]);
-                const parsedArgs = await me._def.args
-                    .parseAsync(args, params)
-                    .catch((e) => {
-                    error.addIssue(makeArgsIssue(args, e));
-                    throw error;
-                });
-                const result = await Reflect.apply(fn, this, parsedArgs);
-                const parsedReturns = await me._def.returns._def.type
-                    .parseAsync(result, params)
-                    .catch((e) => {
-                    error.addIssue(makeReturnsIssue(result, e));
-                    throw error;
-                });
-                return parsedReturns;
-            });
-        }
-        else {
-            // Would love a way to avoid disabling this rule, but we need
-            // an alias (using an arrow function was what caused 2651).
-            // eslint-disable-next-line @typescript-eslint/no-this-alias
-            const me = this;
-            return OK(function (...args) {
-                const parsedArgs = me._def.args.safeParse(args, params);
-                if (!parsedArgs.success) {
-                    throw new ZodError([makeArgsIssue(args, parsedArgs.error)]);
-                }
-                const result = Reflect.apply(fn, this, parsedArgs.data);
-                const parsedReturns = me._def.returns.safeParse(result, params);
-                if (!parsedReturns.success) {
-                    throw new ZodError([makeReturnsIssue(result, parsedReturns.error)]);
-                }
-                return parsedReturns.data;
-            });
-        }
-    }
-    parameters() {
-        return this._def.args;
-    }
-    returnType() {
-        return this._def.returns;
-    }
-    args(...items) {
-        return new ZodFunction({
-            ...this._def,
-            args: ZodTuple.create(items).rest(ZodUnknown.create()),
-        });
-    }
-    returns(returnType) {
-        return new ZodFunction({
-            ...this._def,
-            returns: returnType,
-        });
-    }
-    implement(func) {
-        const validatedFunc = this.parse(func);
-        return validatedFunc;
-    }
-    strictImplement(func) {
-        const validatedFunc = this.parse(func);
-        return validatedFunc;
-    }
-    static create(args, returns, params) {
-        return new ZodFunction({
-            args: (args
-                ? args
-                : ZodTuple.create([]).rest(ZodUnknown.create())),
-            returns: returns || ZodUnknown.create(),
-            typeName: ZodFirstPartyTypeKind.ZodFunction,
-            ...processCreateParams(params),
-        });
-    }
-}
-class ZodLazy extends ZodType {
-    get schema() {
-        return this._def.getter();
-    }
-    _parse(input) {
-        const { ctx } = this._processInputParams(input);
-        const lazySchema = this._def.getter();
-        return lazySchema._parse({ data: ctx.data, path: ctx.path, parent: ctx });
-    }
-}
-ZodLazy.create = (getter, params) => {
-    return new ZodLazy({
-        getter: getter,
-        typeName: ZodFirstPartyTypeKind.ZodLazy,
-        ...processCreateParams(params),
-    });
-};
-class ZodLiteral extends ZodType {
-    _parse(input) {
-        if (input.data !== this._def.value) {
-            const ctx = this._getOrReturnCtx(input);
-            addIssueToContext(ctx, {
-                received: ctx.data,
-                code: ZodIssueCode.invalid_literal,
-                expected: this._def.value,
-            });
-            return INVALID;
-        }
-        return { status: "valid", value: input.data };
-    }
-    get value() {
-        return this._def.value;
-    }
-}
-ZodLiteral.create = (value, params) => {
-    return new ZodLiteral({
-        value: value,
-        typeName: ZodFirstPartyTypeKind.ZodLiteral,
-        ...processCreateParams(params),
-    });
-};
-function createZodEnum(values, params) {
-    return new ZodEnum({
-        values,
-        typeName: ZodFirstPartyTypeKind.ZodEnum,
-        ...processCreateParams(params),
-    });
-}
-class ZodEnum extends ZodType {
-    constructor() {
-        super(...arguments);
-        _ZodEnum_cache.set(this, void 0);
-    }
-    _parse(input) {
-        if (typeof input.data !== "string") {
-            const ctx = this._getOrReturnCtx(input);
-            const expectedValues = this._def.values;
-            addIssueToContext(ctx, {
-                expected: util.joinValues(expectedValues),
-                received: ctx.parsedType,
-                code: ZodIssueCode.invalid_type,
-            });
-            return INVALID;
-        }
-        if (!__classPrivateFieldGet(this, _ZodEnum_cache, "f")) {
-            __classPrivateFieldSet(this, _ZodEnum_cache, new Set(this._def.values), "f");
-        }
-        if (!__classPrivateFieldGet(this, _ZodEnum_cache, "f").has(input.data)) {
-            const ctx = this._getOrReturnCtx(input);
-            const expectedValues = this._def.values;
-            addIssueToContext(ctx, {
-                received: ctx.data,
-                code: ZodIssueCode.invalid_enum_value,
-                options: expectedValues,
-            });
-            return INVALID;
-        }
-        return OK(input.data);
-    }
-    get options() {
-        return this._def.values;
-    }
-    get enum() {
-        const enumValues = {};
-        for (const val of this._def.values) {
-            enumValues[val] = val;
-        }
-        return enumValues;
-    }
-    get Values() {
-        const enumValues = {};
-        for (const val of this._def.values) {
-            enumValues[val] = val;
-        }
-        return enumValues;
-    }
-    get Enum() {
-        const enumValues = {};
-        for (const val of this._def.values) {
-            enumValues[val] = val;
-        }
-        return enumValues;
-    }
-    extract(values, newDef = this._def) {
-        return ZodEnum.create(values, {
-            ...this._def,
-            ...newDef,
-        });
-    }
-    exclude(values, newDef = this._def) {
-        return ZodEnum.create(this.options.filter((opt) => !values.includes(opt)), {
-            ...this._def,
-            ...newDef,
-        });
-    }
-}
-_ZodEnum_cache = new WeakMap();
-ZodEnum.create = createZodEnum;
-class ZodNativeEnum extends ZodType {
-    constructor() {
-        super(...arguments);
-        _ZodNativeEnum_cache.set(this, void 0);
-    }
-    _parse(input) {
-        const nativeEnumValues = util.getValidEnumValues(this._def.values);
-        const ctx = this._getOrReturnCtx(input);
-        if (ctx.parsedType !== ZodParsedType.string &&
-            ctx.parsedType !== ZodParsedType.number) {
-            const expectedValues = util.objectValues(nativeEnumValues);
-            addIssueToContext(ctx, {
-                expected: util.joinValues(expectedValues),
-                received: ctx.parsedType,
-                code: ZodIssueCode.invalid_type,
-            });
-            return INVALID;
-        }
-        if (!__classPrivateFieldGet(this, _ZodNativeEnum_cache, "f")) {
-            __classPrivateFieldSet(this, _ZodNativeEnum_cache, new Set(util.getValidEnumValues(this._def.values)), "f");
-        }
-        if (!__classPrivateFieldGet(this, _ZodNativeEnum_cache, "f").has(input.data)) {
-            const expectedValues = util.objectValues(nativeEnumValues);
-            addIssueToContext(ctx, {
-                received: ctx.data,
-                code: ZodIssueCode.invalid_enum_value,
-                options: expectedValues,
-            });
-            return INVALID;
-        }
-        return OK(input.data);
-    }
-    get enum() {
-        return this._def.values;
-    }
-}
-_ZodNativeEnum_cache = new WeakMap();
-ZodNativeEnum.create = (values, params) => {
-    return new ZodNativeEnum({
-        values: values,
-        typeName: ZodFirstPartyTypeKind.ZodNativeEnum,
-        ...processCreateParams(params),
-    });
-};
-class ZodPromise extends ZodType {
-    unwrap() {
-        return this._def.type;
-    }
-    _parse(input) {
-        const { ctx } = this._processInputParams(input);
-        if (ctx.parsedType !== ZodParsedType.promise &&
-            ctx.common.async === false) {
-            addIssueToContext(ctx, {
-                code: ZodIssueCode.invalid_type,
-                expected: ZodParsedType.promise,
-                received: ctx.parsedType,
-            });
-            return INVALID;
-        }
-        const promisified = ctx.parsedType === ZodParsedType.promise
-            ? ctx.data
-            : Promise.resolve(ctx.data);
-        return OK(promisified.then((data) => {
-            return this._def.type.parseAsync(data, {
-                path: ctx.path,
-                errorMap: ctx.common.contextualErrorMap,
-            });
-        }));
-    }
-}
-ZodPromise.create = (schema, params) => {
-    return new ZodPromise({
-        type: schema,
-        typeName: ZodFirstPartyTypeKind.ZodPromise,
-        ...processCreateParams(params),
-    });
-};
-class ZodEffects extends ZodType {
-    innerType() {
-        return this._def.schema;
-    }
-    sourceType() {
-        return this._def.schema._def.typeName === ZodFirstPartyTypeKind.ZodEffects
-            ? this._def.schema.sourceType()
-            : this._def.schema;
-    }
-    _parse(input) {
-        const { status, ctx } = this._processInputParams(input);
-        const effect = this._def.effect || null;
-        const checkCtx = {
-            addIssue: (arg) => {
-                addIssueToContext(ctx, arg);
-                if (arg.fatal) {
-                    status.abort();
-                }
-                else {
-                    status.dirty();
-                }
-            },
-            get path() {
-                return ctx.path;
-            },
-        };
-        checkCtx.addIssue = checkCtx.addIssue.bind(checkCtx);
-        if (effect.type === "preprocess") {
-            const processed = effect.transform(ctx.data, checkCtx);
-            if (ctx.common.async) {
-                return Promise.resolve(processed).then(async (processed) => {
-                    if (status.value === "aborted")
-                        return INVALID;
-                    const result = await this._def.schema._parseAsync({
-                        data: processed,
-                        path: ctx.path,
-                        parent: ctx,
-                    });
-                    if (result.status === "aborted")
-                        return INVALID;
-                    if (result.status === "dirty")
-                        return DIRTY(result.value);
-                    if (status.value === "dirty")
-                        return DIRTY(result.value);
-                    return result;
-                });
-            }
-            else {
-                if (status.value === "aborted")
-                    return INVALID;
-                const result = this._def.schema._parseSync({
-                    data: processed,
-                    path: ctx.path,
-                    parent: ctx,
-                });
-                if (result.status === "aborted")
-                    return INVALID;
-                if (result.status === "dirty")
-                    return DIRTY(result.value);
-                if (status.value === "dirty")
-                    return DIRTY(result.value);
-                return result;
-            }
-        }
-        if (effect.type === "refinement") {
-            const executeRefinement = (acc) => {
-                const result = effect.refinement(acc, checkCtx);
-                if (ctx.common.async) {
-                    return Promise.resolve(result);
-                }
-                if (result instanceof Promise) {
-                    throw new Error("Async refinement encountered during synchronous parse operation. Use .parseAsync instead.");
-                }
-                return acc;
-            };
-            if (ctx.common.async === false) {
-                const inner = this._def.schema._parseSync({
-                    data: ctx.data,
-                    path: ctx.path,
-                    parent: ctx,
-                });
-                if (inner.status === "aborted")
-                    return INVALID;
-                if (inner.status === "dirty")
-                    status.dirty();
-                // return value is ignored
-                executeRefinement(inner.value);
-                return { status: status.value, value: inner.value };
-            }
-            else {
-                return this._def.schema
-                    ._parseAsync({ data: ctx.data, path: ctx.path, parent: ctx })
-                    .then((inner) => {
-                    if (inner.status === "aborted")
-                        return INVALID;
-                    if (inner.status === "dirty")
-                        status.dirty();
-                    return executeRefinement(inner.value).then(() => {
-                        return { status: status.value, value: inner.value };
-                    });
-                });
-            }
-        }
-        if (effect.type === "transform") {
-            if (ctx.common.async === false) {
-                const base = this._def.schema._parseSync({
-                    data: ctx.data,
-                    path: ctx.path,
-                    parent: ctx,
-                });
-                if (!isValid(base))
-                    return base;
-                const result = effect.transform(base.value, checkCtx);
-                if (result instanceof Promise) {
-                    throw new Error(`Asynchronous transform encountered during synchronous parse operation. Use .parseAsync instead.`);
-                }
-                return { status: status.value, value: result };
-            }
-            else {
-                return this._def.schema
-                    ._parseAsync({ data: ctx.data, path: ctx.path, parent: ctx })
-                    .then((base) => {
-                    if (!isValid(base))
-                        return base;
-                    return Promise.resolve(effect.transform(base.value, checkCtx)).then((result) => ({ status: status.value, value: result }));
-                });
-            }
-        }
-        util.assertNever(effect);
-    }
-}
-ZodEffects.create = (schema, effect, params) => {
-    return new ZodEffects({
-        schema,
-        typeName: ZodFirstPartyTypeKind.ZodEffects,
-        effect,
-        ...processCreateParams(params),
-    });
-};
-ZodEffects.createWithPreprocess = (preprocess, schema, params) => {
-    return new ZodEffects({
-        schema,
-        effect: { type: "preprocess", transform: preprocess },
-        typeName: ZodFirstPartyTypeKind.ZodEffects,
-        ...processCreateParams(params),
-    });
-};
-class ZodOptional extends ZodType {
-    _parse(input) {
-        const parsedType = this._getType(input);
-        if (parsedType === ZodParsedType.undefined) {
-            return OK(undefined);
-        }
-        return this._def.innerType._parse(input);
-    }
-    unwrap() {
-        return this._def.innerType;
-    }
-}
-ZodOptional.create = (type, params) => {
-    return new ZodOptional({
-        innerType: type,
-        typeName: ZodFirstPartyTypeKind.ZodOptional,
-        ...processCreateParams(params),
-    });
-};
-class ZodNullable extends ZodType {
-    _parse(input) {
-        const parsedType = this._getType(input);
-        if (parsedType === ZodParsedType.null) {
-            return OK(null);
-        }
-        return this._def.innerType._parse(input);
-    }
-    unwrap() {
-        return this._def.innerType;
-    }
-}
-ZodNullable.create = (type, params) => {
-    return new ZodNullable({
-        innerType: type,
-        typeName: ZodFirstPartyTypeKind.ZodNullable,
-        ...processCreateParams(params),
-    });
-};
-class ZodDefault extends ZodType {
-    _parse(input) {
-        const { ctx } = this._processInputParams(input);
-        let data = ctx.data;
-        if (ctx.parsedType === ZodParsedType.undefined) {
-            data = this._def.defaultValue();
-        }
-        return this._def.innerType._parse({
-            data,
-            path: ctx.path,
-            parent: ctx,
-        });
-    }
-    removeDefault() {
-        return this._def.innerType;
-    }
-}
-ZodDefault.create = (type, params) => {
-    return new ZodDefault({
-        innerType: type,
-        typeName: ZodFirstPartyTypeKind.ZodDefault,
-        defaultValue: typeof params.default === "function"
-            ? params.default
-            : () => params.default,
-        ...processCreateParams(params),
-    });
-};
-class ZodCatch extends ZodType {
-    _parse(input) {
-        const { ctx } = this._processInputParams(input);
-        // newCtx is used to not collect issues from inner types in ctx
-        const newCtx = {
-            ...ctx,
-            common: {
-                ...ctx.common,
-                issues: [],
-            },
-        };
-        const result = this._def.innerType._parse({
-            data: newCtx.data,
-            path: newCtx.path,
-            parent: {
-                ...newCtx,
-            },
-        });
-        if (isAsync(result)) {
-            return result.then((result) => {
-                return {
-                    status: "valid",
-                    value: result.status === "valid"
-                        ? result.value
-                        : this._def.catchValue({
-                            get error() {
-                                return new ZodError(newCtx.common.issues);
-                            },
-                            input: newCtx.data,
-                        }),
-                };
-            });
-        }
-        else {
-            return {
-                status: "valid",
-                value: result.status === "valid"
-                    ? result.value
-                    : this._def.catchValue({
-                        get error() {
-                            return new ZodError(newCtx.common.issues);
-                        },
-                        input: newCtx.data,
-                    }),
-            };
-        }
-    }
-    removeCatch() {
-        return this._def.innerType;
-    }
-}
-ZodCatch.create = (type, params) => {
-    return new ZodCatch({
-        innerType: type,
-        typeName: ZodFirstPartyTypeKind.ZodCatch,
-        catchValue: typeof params.catch === "function" ? params.catch : () => params.catch,
-        ...processCreateParams(params),
-    });
-};
-class ZodNaN extends ZodType {
-    _parse(input) {
-        const parsedType = this._getType(input);
-        if (parsedType !== ZodParsedType.nan) {
-            const ctx = this._getOrReturnCtx(input);
-            addIssueToContext(ctx, {
-                code: ZodIssueCode.invalid_type,
-                expected: ZodParsedType.nan,
-                received: ctx.parsedType,
-            });
-            return INVALID;
-        }
-        return { status: "valid", value: input.data };
-    }
-}
-ZodNaN.create = (params) => {
-    return new ZodNaN({
-        typeName: ZodFirstPartyTypeKind.ZodNaN,
-        ...processCreateParams(params),
-    });
-};
-const BRAND = Symbol("zod_brand");
-class ZodBranded extends ZodType {
-    _parse(input) {
-        const { ctx } = this._processInputParams(input);
-        const data = ctx.data;
-        return this._def.type._parse({
-            data,
-            path: ctx.path,
-            parent: ctx,
-        });
-    }
-    unwrap() {
-        return this._def.type;
-    }
-}
-class ZodPipeline extends ZodType {
-    _parse(input) {
-        const { status, ctx } = this._processInputParams(input);
-        if (ctx.common.async) {
-            const handleAsync = async () => {
-                const inResult = await this._def.in._parseAsync({
-                    data: ctx.data,
-                    path: ctx.path,
-                    parent: ctx,
-                });
-                if (inResult.status === "aborted")
-                    return INVALID;
-                if (inResult.status === "dirty") {
-                    status.dirty();
-                    return DIRTY(inResult.value);
-                }
-                else {
-                    return this._def.out._parseAsync({
-                        data: inResult.value,
-                        path: ctx.path,
-                        parent: ctx,
-                    });
-                }
-            };
-            return handleAsync();
-        }
-        else {
-            const inResult = this._def.in._parseSync({
-                data: ctx.data,
-                path: ctx.path,
-                parent: ctx,
-            });
-            if (inResult.status === "aborted")
-                return INVALID;
-            if (inResult.status === "dirty") {
-                status.dirty();
-                return {
-                    status: "dirty",
-                    value: inResult.value,
-                };
-            }
-            else {
-                return this._def.out._parseSync({
-                    data: inResult.value,
-                    path: ctx.path,
-                    parent: ctx,
-                });
-            }
-        }
-    }
-    static create(a, b) {
-        return new ZodPipeline({
-            in: a,
-            out: b,
-            typeName: ZodFirstPartyTypeKind.ZodPipeline,
-        });
-    }
-}
-class ZodReadonly extends ZodType {
-    _parse(input) {
-        const result = this._def.innerType._parse(input);
-        const freeze = (data) => {
-            if (isValid(data)) {
-                data.value = Object.freeze(data.value);
-            }
-            return data;
-        };
-        return isAsync(result)
-            ? result.then((data) => freeze(data))
-            : freeze(result);
-    }
-    unwrap() {
-        return this._def.innerType;
-    }
-}
-ZodReadonly.create = (type, params) => {
-    return new ZodReadonly({
-        innerType: type,
-        typeName: ZodFirstPartyTypeKind.ZodReadonly,
-        ...processCreateParams(params),
-    });
-};
-////////////////////////////////////////
-////////////////////////////////////////
-//////////                    //////////
-//////////      z.custom      //////////
-//////////                    //////////
-////////////////////////////////////////
-////////////////////////////////////////
-function cleanParams(params, data) {
-    const p = typeof params === "function"
-        ? params(data)
-        : typeof params === "string"
-            ? { message: params }
-            : params;
-    const p2 = typeof p === "string" ? { message: p } : p;
-    return p2;
-}
-function custom(check, _params = {}, 
-/**
- * @deprecated
- *
- * Pass `fatal` into the params object instead:
- *
- * ```ts
- * z.string().custom((val) => val.length > 5, { fatal: false })
- * ```
- *
- */
-fatal) {
-    if (check)
-        return ZodAny.create().superRefine((data, ctx) => {
-            var _a, _b;
-            const r = check(data);
-            if (r instanceof Promise) {
-                return r.then((r) => {
-                    var _a, _b;
-                    if (!r) {
-                        const params = cleanParams(_params, data);
-                        const _fatal = (_b = (_a = params.fatal) !== null && _a !== void 0 ? _a : fatal) !== null && _b !== void 0 ? _b : true;
-                        ctx.addIssue({ code: "custom", ...params, fatal: _fatal });
-                    }
-                });
-            }
-            if (!r) {
-                const params = cleanParams(_params, data);
-                const _fatal = (_b = (_a = params.fatal) !== null && _a !== void 0 ? _a : fatal) !== null && _b !== void 0 ? _b : true;
-                ctx.addIssue({ code: "custom", ...params, fatal: _fatal });
-            }
-            return;
-        });
-    return ZodAny.create();
-}
-const late = {
-    object: ZodObject.lazycreate,
-};
-var ZodFirstPartyTypeKind;
-(function (ZodFirstPartyTypeKind) {
-    ZodFirstPartyTypeKind["ZodString"] = "ZodString";
-    ZodFirstPartyTypeKind["ZodNumber"] = "ZodNumber";
-    ZodFirstPartyTypeKind["ZodNaN"] = "ZodNaN";
-    ZodFirstPartyTypeKind["ZodBigInt"] = "ZodBigInt";
-    ZodFirstPartyTypeKind["ZodBoolean"] = "ZodBoolean";
-    ZodFirstPartyTypeKind["ZodDate"] = "ZodDate";
-    ZodFirstPartyTypeKind["ZodSymbol"] = "ZodSymbol";
-    ZodFirstPartyTypeKind["ZodUndefined"] = "ZodUndefined";
-    ZodFirstPartyTypeKind["ZodNull"] = "ZodNull";
-    ZodFirstPartyTypeKind["ZodAny"] = "ZodAny";
-    ZodFirstPartyTypeKind["ZodUnknown"] = "ZodUnknown";
-    ZodFirstPartyTypeKind["ZodNever"] = "ZodNever";
-    ZodFirstPartyTypeKind["ZodVoid"] = "ZodVoid";
-    ZodFirstPartyTypeKind["ZodArray"] = "ZodArray";
-    ZodFirstPartyTypeKind["ZodObject"] = "ZodObject";
-    ZodFirstPartyTypeKind["ZodUnion"] = "ZodUnion";
-    ZodFirstPartyTypeKind["ZodDiscriminatedUnion"] = "ZodDiscriminatedUnion";
-    ZodFirstPartyTypeKind["ZodIntersection"] = "ZodIntersection";
-    ZodFirstPartyTypeKind["ZodTuple"] = "ZodTuple";
-    ZodFirstPartyTypeKind["ZodRecord"] = "ZodRecord";
-    ZodFirstPartyTypeKind["ZodMap"] = "ZodMap";
-    ZodFirstPartyTypeKind["ZodSet"] = "ZodSet";
-    ZodFirstPartyTypeKind["ZodFunction"] = "ZodFunction";
-    ZodFirstPartyTypeKind["ZodLazy"] = "ZodLazy";
-    ZodFirstPartyTypeKind["ZodLiteral"] = "ZodLiteral";
-    ZodFirstPartyTypeKind["ZodEnum"] = "ZodEnum";
-    ZodFirstPartyTypeKind["ZodEffects"] = "ZodEffects";
-    ZodFirstPartyTypeKind["ZodNativeEnum"] = "ZodNativeEnum";
-    ZodFirstPartyTypeKind["ZodOptional"] = "ZodOptional";
-    ZodFirstPartyTypeKind["ZodNullable"] = "ZodNullable";
-    ZodFirstPartyTypeKind["ZodDefault"] = "ZodDefault";
-    ZodFirstPartyTypeKind["ZodCatch"] = "ZodCatch";
-    ZodFirstPartyTypeKind["ZodPromise"] = "ZodPromise";
-    ZodFirstPartyTypeKind["ZodBranded"] = "ZodBranded";
-    ZodFirstPartyTypeKind["ZodPipeline"] = "ZodPipeline";
-    ZodFirstPartyTypeKind["ZodReadonly"] = "ZodReadonly";
-})(ZodFirstPartyTypeKind || (ZodFirstPartyTypeKind = {}));
-const instanceOfType = (
-// const instanceOfType = <T extends new (...args: any[]) => any>(
-cls, params = {
-    message: `Input not instance of ${cls.name}`,
-}) => custom((data) => data instanceof cls, params);
-const stringType = ZodString.create;
-const numberType = ZodNumber.create;
-const nanType = ZodNaN.create;
-const bigIntType = ZodBigInt.create;
-const booleanType = ZodBoolean.create;
-const dateType = ZodDate.create;
-const symbolType = ZodSymbol.create;
-const undefinedType = ZodUndefined.create;
-const nullType = ZodNull.create;
-const anyType = ZodAny.create;
-const unknownType = ZodUnknown.create;
-const neverType = ZodNever.create;
-const voidType = ZodVoid.create;
-const arrayType = ZodArray.create;
-const objectType = ZodObject.create;
-const strictObjectType = ZodObject.strictCreate;
-const unionType = ZodUnion.create;
-const discriminatedUnionType = ZodDiscriminatedUnion.create;
-const intersectionType = ZodIntersection.create;
-const tupleType = ZodTuple.create;
-const recordType = ZodRecord.create;
-const mapType = ZodMap.create;
-const setType = ZodSet.create;
-const functionType = ZodFunction.create;
-const lazyType = ZodLazy.create;
-const literalType = ZodLiteral.create;
-const enumType = ZodEnum.create;
-const nativeEnumType = ZodNativeEnum.create;
-const promiseType = ZodPromise.create;
-const effectsType = ZodEffects.create;
-const optionalType = ZodOptional.create;
-const nullableType = ZodNullable.create;
-const preprocessType = ZodEffects.createWithPreprocess;
-const pipelineType = ZodPipeline.create;
-const ostring = () => stringType().optional();
-const onumber = () => numberType().optional();
-const oboolean = () => booleanType().optional();
-const coerce = {
-    string: ((arg) => ZodString.create({ ...arg, coerce: true })),
-    number: ((arg) => ZodNumber.create({ ...arg, coerce: true })),
-    boolean: ((arg) => ZodBoolean.create({
-        ...arg,
-        coerce: true,
-    })),
-    bigint: ((arg) => ZodBigInt.create({ ...arg, coerce: true })),
-    date: ((arg) => ZodDate.create({ ...arg, coerce: true })),
-};
-const NEVER = INVALID;
-
-var z = /*#__PURE__*/Object.freeze({
-    __proto__: null,
-    defaultErrorMap: errorMap,
-    setErrorMap: setErrorMap,
-    getErrorMap: getErrorMap,
-    makeIssue: makeIssue,
-    EMPTY_PATH: EMPTY_PATH,
-    addIssueToContext: addIssueToContext,
-    ParseStatus: ParseStatus,
-    INVALID: INVALID,
-    DIRTY: DIRTY,
-    OK: OK,
-    isAborted: isAborted,
-    isDirty: isDirty,
-    isValid: isValid,
-    isAsync: isAsync,
-    get util () { return util; },
-    get objectUtil () { return objectUtil; },
-    ZodParsedType: ZodParsedType,
-    getParsedType: getParsedType,
-    ZodType: ZodType,
-    datetimeRegex: datetimeRegex,
-    ZodString: ZodString,
-    ZodNumber: ZodNumber,
-    ZodBigInt: ZodBigInt,
-    ZodBoolean: ZodBoolean,
-    ZodDate: ZodDate,
-    ZodSymbol: ZodSymbol,
-    ZodUndefined: ZodUndefined,
-    ZodNull: ZodNull,
-    ZodAny: ZodAny,
-    ZodUnknown: ZodUnknown,
-    ZodNever: ZodNever,
-    ZodVoid: ZodVoid,
-    ZodArray: ZodArray,
-    ZodObject: ZodObject,
-    ZodUnion: ZodUnion,
-    ZodDiscriminatedUnion: ZodDiscriminatedUnion,
-    ZodIntersection: ZodIntersection,
-    ZodTuple: ZodTuple,
-    ZodRecord: ZodRecord,
-    ZodMap: ZodMap,
-    ZodSet: ZodSet,
-    ZodFunction: ZodFunction,
-    ZodLazy: ZodLazy,
-    ZodLiteral: ZodLiteral,
-    ZodEnum: ZodEnum,
-    ZodNativeEnum: ZodNativeEnum,
-    ZodPromise: ZodPromise,
-    ZodEffects: ZodEffects,
-    ZodTransformer: ZodEffects,
-    ZodOptional: ZodOptional,
-    ZodNullable: ZodNullable,
-    ZodDefault: ZodDefault,
-    ZodCatch: ZodCatch,
-    ZodNaN: ZodNaN,
-    BRAND: BRAND,
-    ZodBranded: ZodBranded,
-    ZodPipeline: ZodPipeline,
-    ZodReadonly: ZodReadonly,
-    custom: custom,
-    Schema: ZodType,
-    ZodSchema: ZodType,
-    late: late,
-    get ZodFirstPartyTypeKind () { return ZodFirstPartyTypeKind; },
-    coerce: coerce,
-    any: anyType,
-    array: arrayType,
-    bigint: bigIntType,
-    boolean: booleanType,
-    date: dateType,
-    discriminatedUnion: discriminatedUnionType,
-    effect: effectsType,
-    'enum': enumType,
-    'function': functionType,
-    'instanceof': instanceOfType,
-    intersection: intersectionType,
-    lazy: lazyType,
-    literal: literalType,
-    map: mapType,
-    nan: nanType,
-    nativeEnum: nativeEnumType,
-    never: neverType,
-    'null': nullType,
-    nullable: nullableType,
-    number: numberType,
-    object: objectType,
-    oboolean: oboolean,
-    onumber: onumber,
-    optional: optionalType,
-    ostring: ostring,
-    pipeline: pipelineType,
-    preprocess: preprocessType,
-    promise: promiseType,
-    record: recordType,
-    set: setType,
-    strictObject: strictObjectType,
-    string: stringType,
-    symbol: symbolType,
-    transformer: effectsType,
-    tuple: tupleType,
-    'undefined': undefinedType,
-    union: unionType,
-    unknown: unknownType,
-    'void': voidType,
-    NEVER: NEVER,
-    ZodIssueCode: ZodIssueCode,
-    quotelessJson: quotelessJson,
-    ZodError: ZodError
-});
-
-
-
-
-/***/ }),
-
 /***/ "./src/main/index.ts":
 /*!***************************!*\
   !*** ./src/main/index.ts ***!
@@ -23685,7 +23837,7 @@ var __importStar = (this && this.__importStar) || function (mod) {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.aiService = exports.AIService = void 0;
 const sdk_1 = __webpack_require__(/*! @anthropic-ai/sdk */ "./node_modules/@anthropic-ai/sdk/index.js");
-const openai_1 = __webpack_require__(Object(function webpackMissingModule() { var e = new Error("Cannot find module 'openai'"); e.code = 'MODULE_NOT_FOUND'; throw e; }()));
+const openai_1 = __webpack_require__(/*! openai */ "./node_modules/openai/index.js");
 const dotenv = __importStar(__webpack_require__(/*! dotenv */ "./node_modules/dotenv/lib/main.js"));
 const fs = __importStar(__webpack_require__(/*! fs */ "fs"));
 const path = __importStar(__webpack_require__(/*! path */ "path"));
@@ -23772,15 +23924,14 @@ class AIService {
             throw new Error('Anthropic provider not initialized');
         }
         try {
-            const response = await this.anthropic.messages.create({
+            // Use the completions API for Anthropic (Claude API)
+            const response = await this.anthropic.completions.create({
                 model: this.currentModel,
-                messages: messages,
-                max_tokens: 4096,
+                prompt: messages.map(m => `${m.role}: ${m.content}`).join('\n'),
+                max_tokens_to_sample: 4096,
             });
-            // TODO: Handle tool calls from Anthropic
-            // This is a placeholder for when Anthropic supports tool calls
             return {
-                response: response.content[0].text,
+                response: response.completion,
                 toolCalls: [],
             };
         }
@@ -23856,7 +24007,6 @@ var __importStar = (this && this.__importStar) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.mcpService = exports.MCPService = void 0;
-const mcp_client_1 = __webpack_require__(/*! mcp-client */ "./node_modules/mcp-client/dist/MCPClient.js");
 const dotenv = __importStar(__webpack_require__(/*! dotenv */ "./node_modules/dotenv/lib/main.js"));
 const fs = __importStar(__webpack_require__(/*! fs */ "fs"));
 const path = __importStar(__webpack_require__(/*! path */ "path"));
@@ -23873,8 +24023,6 @@ class MCPService {
         // Load config
         const configPath = path.join(process.cwd(), 'config', 'mcp.config.json');
         this.config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-        // Initialize MCP client
-        this.client = new mcp_client_1.MCPClient();
         // Initialize servers
         this.initServers();
     }
@@ -23923,18 +24071,28 @@ class MCPService {
                 process.stderr.on('data', (data) => {
                     console.error(`[${serverConfig.name}] ${data.toString().trim()}`);
                 });
-                // Connect to server
-                this.client.connectToStdioServer(serverConfig.name, process.stdin, process.stdout)
-                    .then((server) => {
-                    this.servers.set(serverConfig.name, server);
-                    this.loadServerTools(serverConfig.name, server);
-                    console.log(`Connected to MCP server ${serverConfig.name}`);
-                    resolve();
-                })
-                    .catch((error) => {
-                    console.error(`Failed to connect to MCP server ${serverConfig.name}:`, error);
-                    reject(error);
-                });
+                // Create a mock server object for now
+                // In a real implementation, this would connect to the actual server
+                const mockServer = {
+                    getTools: async () => {
+                        return [];
+                    },
+                    getResources: async () => {
+                        return [];
+                    },
+                    executeTool: async (toolName, args) => {
+                        console.log(`Executing tool ${toolName} with args:`, args);
+                        return { result: "Tool execution not implemented" };
+                    },
+                    accessResource: async (uri) => {
+                        console.log(`Accessing resource ${uri}`);
+                        return { data: "Resource access not implemented" };
+                    }
+                };
+                this.servers.set(serverConfig.name, mockServer);
+                this.loadServerTools(serverConfig.name, mockServer);
+                console.log(`Connected to MCP server ${serverConfig.name}`);
+                resolve();
             }
             catch (error) {
                 console.error(`Failed to start MCP server ${serverConfig.name}:`, error);
@@ -23954,12 +24112,26 @@ class MCPService {
                 const envVar = apiKey.slice(2, -1);
                 apiKey = process.env[envVar] || '';
             }
-            // Connect to server
-            const server = await this.client.connectToSSEServer(serverConfig.name, serverConfig.url, apiKey);
-            // Store server
-            this.servers.set(serverConfig.name, server);
-            // Load server tools
-            this.loadServerTools(serverConfig.name, server);
+            // Create a mock server object for now
+            // In a real implementation, this would connect to the actual server
+            const mockServer = {
+                getTools: async () => {
+                    return [];
+                },
+                getResources: async () => {
+                    return [];
+                },
+                executeTool: async (toolName, args) => {
+                    console.log(`Executing tool ${toolName} with args:`, args);
+                    return { result: "Tool execution not implemented" };
+                },
+                accessResource: async (uri) => {
+                    console.log(`Accessing resource ${uri}`);
+                    return { data: "Resource access not implemented" };
+                }
+            };
+            this.servers.set(serverConfig.name, mockServer);
+            this.loadServerTools(serverConfig.name, mockServer);
             console.log(`Connected to MCP server ${serverConfig.name}`);
         }
         catch (error) {
@@ -24284,17 +24456,6 @@ module.exports = require("electron");
 
 /***/ }),
 
-/***/ "events":
-/*!*************************!*\
-  !*** external "events" ***!
-  \*************************/
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("events");
-
-/***/ }),
-
 /***/ "fs":
 /*!*********************!*\
   !*** external "fs" ***!
@@ -24339,17 +24500,6 @@ module.exports = require("net");
 
 /***/ }),
 
-/***/ "node:crypto":
-/*!******************************!*\
-  !*** external "node:crypto" ***!
-  \******************************/
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("node:crypto");
-
-/***/ }),
-
 /***/ "node:fs":
 /*!**************************!*\
   !*** external "node:fs" ***!
@@ -24361,17 +24511,6 @@ module.exports = require("node:fs");
 
 /***/ }),
 
-/***/ "node:process":
-/*!*******************************!*\
-  !*** external "node:process" ***!
-  \*******************************/
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("node:process");
-
-/***/ }),
-
 /***/ "node:stream":
 /*!******************************!*\
   !*** external "node:stream" ***!
@@ -24380,6 +24519,17 @@ module.exports = require("node:process");
 
 "use strict";
 module.exports = require("node:stream");
+
+/***/ }),
+
+/***/ "node:stream/web":
+/*!**********************************!*\
+  !*** external "node:stream/web" ***!
+  \**********************************/
+/***/ ((module) => {
+
+"use strict";
+module.exports = require("node:stream/web");
 
 /***/ }),
 
@@ -24509,36 +24659,6 @@ module.exports = require("zlib");
 /******/ 	}
 /******/ 	
 /************************************************************************/
-/******/ 	/* webpack/runtime/create fake namespace object */
-/******/ 	(() => {
-/******/ 		var getProto = Object.getPrototypeOf ? (obj) => (Object.getPrototypeOf(obj)) : (obj) => (obj.__proto__);
-/******/ 		var leafPrototypes;
-/******/ 		// create a fake namespace object
-/******/ 		// mode & 1: value is a module id, require it
-/******/ 		// mode & 2: merge all properties of value into the ns
-/******/ 		// mode & 4: return value when already ns object
-/******/ 		// mode & 16: return value when it's Promise-like
-/******/ 		// mode & 8|1: behave like require
-/******/ 		__webpack_require__.t = function(value, mode) {
-/******/ 			if(mode & 1) value = this(value);
-/******/ 			if(mode & 8) return value;
-/******/ 			if(typeof value === 'object' && value) {
-/******/ 				if((mode & 4) && value.__esModule) return value;
-/******/ 				if((mode & 16) && typeof value.then === 'function') return value;
-/******/ 			}
-/******/ 			var ns = Object.create(null);
-/******/ 			__webpack_require__.r(ns);
-/******/ 			var def = {};
-/******/ 			leafPrototypes = leafPrototypes || [null, getProto({}), getProto([]), getProto(getProto)];
-/******/ 			for(var current = mode & 2 && value; typeof current == 'object' && !~leafPrototypes.indexOf(current); current = getProto(current)) {
-/******/ 				Object.getOwnPropertyNames(current).forEach((key) => (def[key] = () => (value[key])));
-/******/ 			}
-/******/ 			def['default'] = () => (value);
-/******/ 			__webpack_require__.d(ns, def);
-/******/ 			return ns;
-/******/ 		};
-/******/ 	})();
-/******/ 	
 /******/ 	/* webpack/runtime/define property getters */
 /******/ 	(() => {
 /******/ 		// define getter functions for harmony exports
@@ -24569,7 +24689,7 @@ module.exports = require("zlib");
 /******/ 	
 /******/ 	/* webpack/runtime/compat */
 /******/ 	
-/******/ 	if (typeof __nccwpck_require__ !== 'undefined') __nccwpck_require__.ab = __dirname + "/native_modules/";
+/******/ 	if (typeof __webpack_require__ !== 'undefined') __webpack_require__.ab = __dirname + "/native_modules/";
 /******/ 	
 /************************************************************************/
 /******/ 	

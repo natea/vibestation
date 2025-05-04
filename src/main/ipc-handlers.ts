@@ -25,10 +25,7 @@ function registerAiHandlers(): void {
   // Send a message to the AI
   ipcMain.handle('ai:send-message', async (event, message: string) => {
     try {
-      const messages: Message[] = [{ 
-        role: 'user', 
-        content: message 
-      }];
+      const messages = [{ role: 'user' as const, content: message }];
       
       const response = await aiService.sendMessage(messages, async (toolCall) => {
         // Handle tool calls

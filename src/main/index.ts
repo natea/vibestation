@@ -5,6 +5,10 @@ import { registerIpcHandlers } from './ipc-handlers';
 import { aiService } from '../services/ai/ai-service';
 import { mcpService } from '../services/mcp/mcp-service';
 
+// Declare Electron Forge webpack constants
+declare const MAIN_WINDOW_WEBPACK_ENTRY: string;
+declare const MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY: string;
+
 // Load environment variables
 dotenv.config();
 
@@ -12,10 +16,6 @@ dotenv.config();
 if (require('electron-squirrel-startup')) {
   app.quit();
 }
-
-// Webpack entry points - these will be replaced by webpack during build
-declare const MAIN_WINDOW_WEBPACK_ENTRY: string;
-declare const MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY: string;
 
 let mainWindow: BrowserWindow | null = null;
 
