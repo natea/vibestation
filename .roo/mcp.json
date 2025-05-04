@@ -26,7 +26,21 @@
       "url": "https://mcp.composio.dev/mem0/abandoned-creamy-horse-Y39-hm?agent=cursor"
     },
     "perplexityai": {
-      "url": "https://mcp.composio.dev/perplexityai/abandoned-creamy-horse-Y39-hm?agent=cursor"
+      "url": "https://mcp.composio.dev/composio/server/replace_with_your_composio_server_id",
+      "alwaysAllow": [
+        "PERPLEXITYAI_PERPLEXITY_AI_SEARCH"
+      ]
+    }
+    "firecrawl": {
+      "url": "https://mcp.composio.dev/composio/server/insert_your_server_id",
+      "alwaysAllow": [
+        "FIRECRAWL_SEARCH",
+        "FIRECRAWL_MAP_URLS",
+        "FIRECRAWL_CRAWL_URLS",
+        "FIRECRAWL_EXTRACT",
+        "FIRECRAWL_SCRAPE_EXTRACT_DATA_LLM"
+      ],
+      "timeout": 1800
     }
   }
 }
