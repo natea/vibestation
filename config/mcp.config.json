@@ -1,0 +1,20 @@
+{
+  "servers": [
+    {
+      "name": "local-tools",
+      "type": "stdio",
+      "command": "node ./mcp-servers/local-tools/index.js",
+      "enabled": true,
+      "autoStart": true
+    },
+    {
+      "name": "composio-example",
+      "type": "sse",
+      "url": "https://example-composio-server.com/sse",
+      "apiKey": "${COMPOSIO_API_KEY}",
+      "enabled": false,
+      "autoStart": false
+    }
+  ],
+  "defaultServer": "local-tools"
+}
