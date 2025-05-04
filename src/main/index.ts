@@ -5,6 +5,10 @@ import { registerIpcHandlers } from './ipc-handlers';
 import { aiService } from '../services/ai/ai-service';
 import { mcpService } from '../services/mcp/mcp-service';
 
+// Declare Electron Forge webpack constants
+declare const MAIN_WINDOW_WEBPACK_ENTRY: string;
+declare const MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY: string;
+
 // Load environment variables
 dotenv.config();
 

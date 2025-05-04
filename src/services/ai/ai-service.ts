@@ -154,16 +154,15 @@ export class AIService {
     }
 
     try {
-      const response = await this.anthropic.messages.create({
+      // Use the completions API for Anthropic (Claude API)
+      const response = await this.anthropic.completions.create({
         model: this.currentModel,
-        messages: messages,
-        max_tokens: 4096,
+        prompt: messages.map(m => `${m.role}: ${m.content}`).join('\n'),
+        max_tokens_to_sample: 4096,
       });
-
-      // TODO: Handle tool calls from Anthropic
-      // This is a placeholder for when Anthropic supports tool calls
+      
       return {
-        response: response.content[0].text,
+        response: response.completion,
         toolCalls: [],
       };
     } catch (error) {

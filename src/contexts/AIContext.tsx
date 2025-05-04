@@ -69,7 +69,7 @@ export const AIProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
         
         // Get current provider and model
         const { provider, model } = await window.electronAPI.getCurrentProvider();
-        setCurrentProvider(provider);
+        setCurrentProvider(provider as Provider);
         setCurrentModel(model);
         
         // Load models for the current provider
