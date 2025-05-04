@@ -52,9 +52,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.10.0",
     "@tailwindcss/forms": "^0.5.7",
-    "@vercel/ai": "^2.2.13",
-    "@vercel/ai-sdk": "^2.2.13",
-    "ai": "^2.2.13",
+    "ai": "^4.3.13",
     "dotenv": "^16.3.1",
     "electron-squirrel-startup": "^1.0.0",
     "mcp-client": "^1.8.0",
