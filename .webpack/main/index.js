@@ -29769,7 +29769,7 @@ const createWindow = () => {
         width: 1200,
         height: 800,
         webPreferences: {
-            preload: '/Users/nateaune/Documents/code/vibestation/.webpack/renderer/main_window/preload.js',
+            preload: '/home/andrei/build/analytiq/vibestation/.webpack/renderer/main_window/preload.js',
             nodeIntegration: false,
             contextIsolation: true,
         },

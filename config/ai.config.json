@@ -36,7 +36,7 @@
       ]
     },
     "openai": {
-      "enabled": true,
+      "enabled": false,
       "models": [
         {
           "id": "gpt-4-turbo",
