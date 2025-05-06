@@ -127,15 +127,27 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       // Add message in the main process
       const newMessage = await window.electronAPI.addChatMessage(currentChat.id, message);
       
-      // Update state
-      const updatedChat = {
-        ...currentChat,
-        messages: [...currentChat.messages, newMessage],
-        updatedAt: Date.now(),
-      };
+      setCurrentChat(prevChat => {
+        if (!prevChat) return prevChat;
+        const updatedChat = {
+          ...prevChat,
+          messages: [...prevChat.messages, newMessage],
+          updatedAt: Date.now(),
+        };
+        return updatedChat;
+      });
       
-      setCurrentChat(updatedChat);
-      setChats(chats.map(chat => chat.id === updatedChat.id ? updatedChat : chat));
+      setChats(prevChats =>
+        prevChats.map(chat =>
+          chat.id === currentChat.id
+            ? {
+                ...chat,
+                messages: [...chat.messages, newMessage],
+                updatedAt: Date.now(),
+              }
+            : chat
+        )
+      );
       
       setLoading(false);
       
