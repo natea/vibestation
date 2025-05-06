@@ -116,12 +116,14 @@ const ChatComponent: React.FC = () => {
                 </div>
               </div>
             ) : (
-              currentChat.messages.map((message) => (
+              currentChat.messages.map((msg, idx) => (
                 <div
-                  key={message.id}
-                  className={`message ${message.role === 'user' ? 'user-message' : 'ai-message'}`}
+                  key={idx}
+                  className={msg.role === 'user' ? 'text-right text-blue-700' : 'text-left text-gray-800'}
                 >
-                  {message.content}
+                  <div className="inline-block px-4 py-2 rounded-lg bg-gray-100 my-2">
+                    {msg.content}
+                  </div>
                 </div>
               ))
             )}
