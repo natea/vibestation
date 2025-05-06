@@ -84,6 +84,5 @@ Vibestation is a modular, Electron-based desktop app with a React frontend, supp
 
 ```
 Config files:
-* - config/ai.config.json      (AI provider settings)
-  - `config/mcp.config.json`     (MCP server/tool settings)
-  - `config/mcp.config.json`     (MCP server/tool settings)
+* `config/ai.config.json`      (AI provider settings)
+* `config/mcp.config.json`     (MCP server/tool settings)
